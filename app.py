@@ -1,0 +1,368 @@
+import os
+
+import pandas as pd
+import streamlit as st
+from dotenv import load_dotenv
+
+from datetime import date, timedelta
+
+from core import fetch_activities, get_client, schedule_workout, upload_workout
+from core.schemas import SimpleIntervalParams, AdvancedIntervalParams
+from core.ai_assistant import MODEL_HAIKU, MODEL_SONNET, RunningCoach  # noqa: F401
+from core.models import Activities
+from core.plotting import plot_workout
+
+load_dotenv()
+
+st.set_page_config(page_title="runny.ai", layout="wide")
+
+
+# ── Session state defaults ──────────────────────────────────────────
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "coach" not in st.session_state:
+    st.session_state.coach = RunningCoach()
+if "garmin_client" not in st.session_state:
+    st.session_state.garmin_client = None
+if "activities" not in st.session_state:
+    st.session_state.activities = None
+if "pending_workouts" not in st.session_state:
+    st.session_state.pending_workouts = []
+
+
+# ── Sidebar: Garmin connection ──────────────────────────────────────
+with st.sidebar:
+    st.header("Garmin Connect")
+
+    email = st.text_input("Email", value=os.getenv("GARMIN_EMAIL", ""))
+    password = st.text_input("Password", value=os.getenv("GARMIN_PASSWORD", ""), type="password")
+
+    if st.button("Connect", use_container_width=True):
+        with st.spinner("Connecting to Garmin..."):
+            try:
+                client = get_client(email=email, password=password)
+                st.session_state.garmin_client = client
+                st.success("Connected!")
+            except Exception as e:
+                st.error(f"Connection failed: {e}")
+
+    st.divider()
+
+    if st.session_state.garmin_client is not None and st.session_state.activities is None:
+        if st.button("Load Activities (optional)", use_container_width=True):
+            with st.spinner("Fetching activities..."):
+                try:
+                    raw = fetch_activities(st.session_state.garmin_client, limit=50)
+                    st.session_state.activities = raw
+                    st.session_state.coach = RunningCoach(activities=raw)
+                    st.success("Activities loaded!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to load activities: {e}")
+
+    if st.session_state.activities is not None:
+        st.divider()
+        activities: Activities = st.session_state.activities
+        runs = activities.runs()
+        if runs:
+            # Summary metrics
+            st.subheader(f"Running Summary ({len(runs)} runs)")
+            total_km = sum(r.distance_km or 0 for r in runs)
+            avg_pace = sum(r.pace_min_per_km for r in runs if r.pace_min_per_km) / max(
+                sum(1 for r in runs if r.pace_min_per_km), 1
+            )
+            avg_hr = sum(r.average_hr for r in runs if r.average_hr) / max(
+                sum(1 for r in runs if r.average_hr), 1
+            )
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Distance", f"{total_km:.1f} km")
+            m2.metric("Avg Pace", f"{avg_pace:.2f} min/km")
+            m3.metric("Avg HR", f"{avg_hr:.0f} bpm")
+
+            # Build dataframe for charts
+            df = pd.DataFrame([
+                {
+                    "Date": r.start_time_local.strftime("%Y-%m-%d"),
+                    "Distance (km)": r.distance_km,
+                    "Pace (min/km)": r.pace_min_per_km,
+                    "Avg HR": int(r.average_hr) if r.average_hr else None,
+                    "Aerobic TE": r.aerobic_training_effect,
+                    "Anaerobic TE": r.anaerobic_training_effect,
+                }
+                for r in runs[:20]
+            ])
+            df["Date"] = pd.to_datetime(df["Date"])
+            df = df.sort_values("Date")
+
+            # Distance bar chart
+            st.caption("Distance per run")
+            st.bar_chart(df.set_index("Date")["Distance (km)"])
+
+            # Pace line chart
+            st.caption("Pace trend (lower is faster)")
+            st.line_chart(df.set_index("Date")["Pace (min/km)"])
+
+            # Heart rate line chart
+            st.caption("Average heart rate")
+            st.line_chart(df.set_index("Date")["Avg HR"])
+
+            # Detailed table in expander
+            with st.expander("Activity details"):
+                st.dataframe(
+                    df.sort_values("Date", ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        else:
+            st.info("No running activities found.")
+
+
+# ── Main area ───────────────────────────────────────────────────────
+title_col, clear_col = st.columns([5, 1])
+with title_col:
+    st.title("runny.ai")
+with clear_col:
+    st.write("")  # spacer to align with title
+    if st.button("Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.session_state.pending_workouts = []
+        activities = st.session_state.activities
+        st.session_state.coach = RunningCoach(activities=activities)
+        st.rerun()
+
+# ── Training type config (used by right column) ────────────────────
+TRAINING_TYPES = {
+    "Easy Run": "Create an easy recovery run workout",
+    "Tempo Run": "Create a tempo run workout at threshold pace",
+    "Interval Training": "Create a high-intensity interval training workout",
+    "Long Run": "Create a long endurance run workout",
+    "Hill Repeats": "Create a hill repeat workout",
+    "Fartlek": "Create a fartlek workout with varied pace changes",
+    "Race Pace": "Create a race pace workout for race preparation",
+}
+
+# ── Make the right column sticky so it scrolls with the page ────────
+st.markdown(
+    """
+    <style>
+    /* Gradient background */
+    .stApp {
+        background: linear-gradient(160deg, #0E1117 0%, #1A1F2E 40%, #1E2A3A 70%, #0E1117 100%);
+    }
+
+    /* Accent border on sidebar */
+    section[data-testid="stSidebar"] {
+        border-right: 2px solid #FF6B6B;
+    }
+
+    /* Colorful subheaders */
+    .stApp h2 {
+        background: linear-gradient(90deg, #FF6B6B, #FFA07A, #FFD700);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    /* Sticky right column */
+    div[data-testid="stColumns"] > div:nth-child(2) > div[data-testid="stVerticalBlockBorderWrapper"] {
+        position: sticky;
+        top: 3.5rem;
+        max-height: 85vh;
+        overflow-y: auto;
+        align-self: flex-start;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ── Two-column layout: Chat (left) | Workouts (right) ──────────────
+chat_col, workout_col = st.columns([3, 2])
+
+# ── Right column: Controls + Proposed workouts ─────────────────────
+with workout_col:
+    st.subheader("Workout Generator")
+    training_type = st.selectbox(
+        "Training type (optional)",
+        options=list(TRAINING_TYPES.keys()),
+        index=None,
+        placeholder="Select a training type...",
+    )
+    available_minutes = st.number_input(
+        "Available time in min (optional)",
+        min_value=0,
+        max_value=180,
+        value=0,
+        step=5,
+        help="Leave at 0 to let the coach decide",
+    )
+
+    btn1, btn2 = st.columns(2)
+    with btn1:
+        generate_clicked = st.button("Generate Workout", use_container_width=True)
+    with btn2:
+        recommend_clicked = st.button("Recommend", use_container_width=True)
+
+    analyse_clicked = st.button("Analyse Training History", use_container_width=True)
+
+    if generate_clicked:
+        parts = []
+        if training_type:
+            parts.append(TRAINING_TYPES[training_type])
+        else:
+            parts.append("Create a running workout")
+        if available_minutes > 0:
+            parts.append(
+                f"for {available_minutes} minutes total. "
+                f"Fit everything (warmup, main set, cooldown) within {available_minutes} minutes"
+            )
+        st.session_state.quick_prompt = ". ".join(parts) + "."
+
+    if recommend_clicked:
+        time_hint = (
+            f" I have {available_minutes} minutes available."
+            if available_minutes > 0
+            else ""
+        )
+        st.session_state.quick_prompt = (
+            "Based on my recent training history, recommend the best workout for today. "
+            "Consider what type of session would complement my recent runs and help me "
+            "improve. Explain your reasoning, then create the workout." + time_hint
+        )
+
+    if analyse_clicked:
+        st.session_state.quick_prompt = (
+            "Provide a detailed analysis of my recent training history. Include:\n"
+            "1. **Volume overview**: total runs, total distance, weekly mileage trend\n"
+            "2. **Intensity distribution**: breakdown of easy vs moderate vs hard sessions "
+            "based on pace and heart rate\n"
+            "3. **Training effect analysis**: average aerobic & anaerobic TE, how many sessions "
+            "were recovery, maintaining, improving, or highly improving\n"
+            "4. **Pace progression**: are my paces improving, plateauing, or declining?\n"
+            "5. **Heart rate trends**: is aerobic efficiency improving (same pace at lower HR)?\n"
+            "6. **Recovery patterns**: am I allowing enough recovery between hard sessions?\n"
+            "7. **Strengths & weaknesses**: what am I doing well and what needs attention?\n"
+            "8. **Recommendations**: specific actionable advice for the next 1-2 weeks\n\n"
+            "Be specific with numbers and dates from my data."
+        )
+
+    st.divider()
+    st.subheader("Proposed Workouts")
+    if not st.session_state.pending_workouts:
+        st.caption("No workouts yet. Chat with the coach or generate one above.")
+    for i, (name, workout, params) in enumerate(st.session_state.pending_workouts):
+        with st.expander(f"{name}", expanded=(i == len(st.session_state.pending_workouts) - 1)):
+            segments = workout.workoutSegments
+            if segments:
+                steps = segments[0].workoutSteps
+                st.write(f"**Estimated duration:** {workout.estimatedDurationInSecs // 60} min")
+                st.write(f"**Steps:** {len(steps)}")
+
+            if params is not None:
+                fig = plot_workout(params)
+                st.pyplot(fig)
+
+            custom_name = st.text_input(
+                "Workout name",
+                value=name,
+                key=f"name_{i}",
+            )
+
+            if st.session_state.garmin_client is not None:
+                schedule_date = st.date_input(
+                    "Schedule for",
+                    value=date.today() + timedelta(days=1),
+                    min_value=date.today(),
+                    key=f"date_{i}",
+                )
+
+                upload_col, schedule_col = st.columns(2)
+                with upload_col:
+                    if st.button("Upload to Garmin", key=f"upload_{i}"):
+                        workout.workoutName = custom_name
+                        with st.spinner("Uploading..."):
+                            try:
+                                upload_workout(st.session_state.garmin_client, workout)
+                                st.success(f"'{custom_name}' uploaded!")
+                            except Exception as e:
+                                st.error(f"Upload failed: {e}")
+                with schedule_col:
+                    if st.button("Upload & Schedule", key=f"schedule_{i}"):
+                        workout.workoutName = custom_name
+                        with st.spinner("Uploading & scheduling..."):
+                            try:
+                                result = upload_workout(st.session_state.garmin_client, workout)
+                                workout_id = result.get("workoutId")
+                                if workout_id:
+                                    schedule_workout(
+                                        st.session_state.garmin_client,
+                                        workout_id,
+                                        str(schedule_date),
+                                    )
+                                    st.success(
+                                        f"'{custom_name}' scheduled for {schedule_date}!"
+                                    )
+                                else:
+                                    st.warning("Uploaded but could not schedule — no workout ID returned.")
+                            except Exception as e:
+                                st.error(f"Failed: {e}")
+            else:
+                st.caption("Connect to Garmin to upload.")
+
+# ── Left column: Chat ──────────────────────────────────────────────
+with chat_col:
+    # Display chat history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+# ── Resolve prompt (quick-generate or chat input) ───────────────────
+user_input = st.chat_input("Ask your running coach...")
+prompt = None
+if "quick_prompt" in st.session_state:
+    prompt = st.session_state.pop("quick_prompt")
+elif user_input:
+    prompt = user_input
+
+_SONNET_KEYWORDS = {"create", "generate", "build", "workout", "analyse", "analysis", "recommend", "history"}
+
+def _pick_model(prompt_text: str) -> str:
+    """Use Sonnet for workout creation/analysis, Haiku for conversation."""
+    lower = prompt_text.lower()
+    if any(kw in lower for kw in _SONNET_KEYWORDS):
+        return MODEL_SONNET
+    return MODEL_HAIKU
+
+if prompt:
+    st.session_state.coach.set_model(_pick_model(prompt))
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with chat_col:
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            captured = {"workout": None, "params": None}
+            try:
+                stream = st.session_state.coach.chat_stream(prompt)
+
+                def _stream_with_capture():
+                    for chunk in stream:
+                        if isinstance(chunk, str):
+                            yield chunk
+                        elif isinstance(chunk, tuple):
+                            captured["workout"], captured["params"] = chunk
+
+                text = st.write_stream(_stream_with_capture())
+            except Exception as e:
+                text = f"Sorry, I encountered an error: {e}"
+                st.markdown(text)
+
+    if text is None:
+        text = ""
+
+    st.session_state.messages.append({"role": "assistant", "content": text})
+
+    if captured["workout"] and captured["params"]:
+        st.session_state.pending_workouts.append(
+            (captured["params"].name, captured["workout"], captured["params"])
+        )
+        st.rerun()
