@@ -6,11 +6,12 @@ from dotenv import load_dotenv
 
 from datetime import date, timedelta
 
-from core import fetch_activities, get_client, schedule_workout, upload_workout
+from core import fetch_activities, fetch_user_profile, get_client, schedule_workout, upload_workout
 from core.schemas import SimpleIntervalParams, AdvancedIntervalParams
-from core.ai_assistant import MODEL_HAIKU, MODEL_SONNET, RunningCoach  # noqa: F401
+from core.ai_assistant import RunningCoach
 from core.models import Activities
 from core.plotting import plot_workout
+from core.suggestions import derive_inputs_from_garmin
 
 load_dotenv()
 
@@ -28,6 +29,10 @@ if "activities" not in st.session_state:
     st.session_state.activities = None
 if "pending_workouts" not in st.session_state:
     st.session_state.pending_workouts = []
+if "garmin_defaults" not in st.session_state:
+    st.session_state.garmin_defaults = {}
+if "user_profile" not in st.session_state:
+    st.session_state.user_profile = None
 
 
 # ── Sidebar: Garmin connection ──────────────────────────────────────
@@ -54,11 +59,73 @@ with st.sidebar:
                 try:
                     raw = fetch_activities(st.session_state.garmin_client, limit=50)
                     st.session_state.activities = raw
-                    st.session_state.coach = RunningCoach(activities=raw)
+                    st.session_state.coach = RunningCoach(
+                        activities=raw, profile=st.session_state.user_profile
+                    )
+                    st.session_state.garmin_defaults = derive_inputs_from_garmin(
+                        raw, profile=st.session_state.user_profile
+                    )
                     st.success("Activities loaded!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Failed to load activities: {e}")
+
+    if st.session_state.garmin_client is not None and st.session_state.user_profile is None:
+        if st.button("Load Profile (HR, VO2max, zones...)", use_container_width=True):
+            with st.spinner("Fetching profile data..."):
+                try:
+                    profile = fetch_user_profile(st.session_state.garmin_client)
+                    st.session_state.user_profile = profile
+                    # Rebuild coach with profile data
+                    st.session_state.coach = RunningCoach(
+                        activities=st.session_state.activities,
+                        profile=profile,
+                    )
+                    # Re-derive defaults with real max HR and readiness
+                    if st.session_state.activities:
+                        st.session_state.garmin_defaults = derive_inputs_from_garmin(
+                            st.session_state.activities, profile=profile
+                        )
+                    st.success("Profile loaded!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to load profile: {e}")
+
+    if st.session_state.user_profile is not None:
+        profile = st.session_state.user_profile
+        has_any = any([
+            profile.max_hr, profile.resting_hr, profile.vo2_max,
+            profile.training_status, profile.training_readiness,
+            profile.lactate_threshold_hr, profile.hr_zones,
+            profile.race_predictions,
+        ])
+        with st.expander("Runner Profile", expanded=has_any):
+            if not has_any:
+                st.warning("Profile loaded but no data was returned. Check your Garmin account.")
+            if profile.max_hr:
+                st.write(f"**Max HR:** {profile.max_hr} bpm")
+            if profile.resting_hr:
+                st.write(f"**Resting HR:** {profile.resting_hr} bpm")
+            if profile.vo2_max:
+                st.write(f"**VO2max:** {profile.vo2_max:.1f}")
+            if profile.training_status:
+                st.write(f"**Training status:** {profile.training_status}")
+            if profile.training_readiness is not None:
+                st.write(f"**Readiness:** {profile.training_readiness:.0f}/100")
+            if profile.lactate_threshold_hr:
+                st.write(f"**Lactate threshold HR:** {profile.lactate_threshold_hr} bpm")
+            if profile.hr_zones:
+                st.write("**HR Zones:**")
+                for z in profile.hr_zones:
+                    st.caption(f"Zone {z['zone']}: {z['low']}-{z['high']} bpm")
+            if profile.race_predictions:
+                st.write("**Race predictions:**")
+                for key in ["5k", "10k", "half_marathon", "marathon"]:
+                    fmt = profile.format_race_prediction(key)
+                    if fmt:
+                        st.caption(f"{key}: {fmt}")
+            with st.expander("Raw profile data"):
+                st.json(profile.model_dump())
 
     if st.session_state.activities is not None:
         st.divider()
@@ -117,17 +184,20 @@ with st.sidebar:
             st.info("No running activities found.")
 
 
+
 # ── Main area ───────────────────────────────────────────────────────
 title_col, clear_col = st.columns([5, 1])
 with title_col:
     st.title("runny.ai")
 with clear_col:
-    st.write("")  # spacer to align with title
+    st.write("")  # vertical spacer to align with title
     if st.button("Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.session_state.pending_workouts = []
-        activities = st.session_state.activities
-        st.session_state.coach = RunningCoach(activities=activities)
+        st.session_state.coach = RunningCoach(
+            activities=st.session_state.activities,
+            profile=st.session_state.user_profile,
+        )
         st.rerun()
 
 # ── Training type config (used by right column) ────────────────────
@@ -180,93 +250,152 @@ chat_col, workout_col = st.columns([3, 2])
 
 # ── Right column: Controls + Proposed workouts ─────────────────────
 with workout_col:
-    st.subheader("Workout Generator")
-    training_type = st.selectbox(
-        "Training type (optional)",
-        options=list(TRAINING_TYPES.keys()),
-        index=None,
-        placeholder="Select a training type...",
-    )
-    available_minutes = st.number_input(
-        "Available time in min (optional)",
-        min_value=0,
-        max_value=180,
-        value=0,
-        step=5,
-        help="Leave at 0 to let the coach decide",
-    )
+    quick_tab, custom_tab = st.tabs(["Smart Coach", "Advanced Builder"])
 
-    btn1, btn2 = st.columns(2)
-    with btn1:
-        generate_clicked = st.button("Generate Workout", use_container_width=True)
-    with btn2:
-        recommend_clicked = st.button("Recommend", use_container_width=True)
+    # ── Tab 1: Smart Coach — analyse first, then recommend ─────────
+    with quick_tab:
+        has_data = st.session_state.activities is not None
+        has_analysis = st.session_state.coach.training_summary is not None
 
-    analyse_clicked = st.button("Analyse Training History", use_container_width=True)
+        if not has_data:
+            st.info("Connect to Garmin and load activities to get started.")
 
-    if generate_clicked:
-        parts = []
-        if training_type:
-            parts.append(TRAINING_TYPES[training_type])
-        else:
-            parts.append("Create a running workout")
-        if available_minutes > 0:
-            parts.append(
-                f"for {available_minutes} minutes total. "
-                f"Fit everything (warmup, main set, cooldown) within {available_minutes} minutes"
+        # Step 1: Analyse
+        st.markdown("**Step 1** — Analyse your training")
+        analyse_disabled = not has_data
+        if st.button(
+            "Analyse Training History",
+            use_container_width=True,
+            disabled=analyse_disabled,
+        ):
+            st.session_state.quick_prompt = (
+                "Provide a detailed analysis of my recent training history. Include:\n"
+                "1. **Volume overview**: total runs, total distance, weekly mileage trend\n"
+                "2. **Intensity distribution**: breakdown of easy vs moderate vs hard sessions "
+                "based on pace and heart rate\n"
+                "3. **Training effect analysis**: average aerobic & anaerobic TE, how many sessions "
+                "were recovery, maintaining, improving, or highly improving\n"
+                "4. **Pace progression**: are my paces improving, plateauing, or declining?\n"
+                "5. **Heart rate trends**: is aerobic efficiency improving (same pace at lower HR)?\n"
+                "6. **Recovery patterns**: am I allowing enough recovery between hard sessions?\n"
+                "7. **Strengths & weaknesses**: what am I doing well and what needs attention?\n"
+                "8. **Recommendations**: specific actionable advice for the next 1-2 weeks\n\n"
+                "Be specific with numbers and dates from my data."
             )
-        st.session_state.quick_prompt = ". ".join(parts) + "."
 
-    if recommend_clicked:
-        time_hint = (
-            f" I have {available_minutes} minutes available."
-            if available_minutes > 0
-            else ""
+        # Step 2: Recommend
+        st.markdown("**Step 2** — Get a workout recommendation")
+        recommend_disabled = not has_analysis
+        if recommend_disabled and has_data:
+            st.caption("Run the analysis first to unlock recommendations.")
+        if st.button(
+            "Recommend Workout",
+            use_container_width=True,
+            type="primary",
+            disabled=recommend_disabled,
+        ):
+            st.session_state.quick_prompt = (
+                "Based on the training analysis, recommend and create "
+                "the best workout for today. Consider intensity distribution, "
+                "recovery patterns, and training effect trends. "
+                "Explain your reasoning, then create the workout."
+            )
+
+    # ── Tab 2: Custom — user specifies what they want ─────────────
+    with custom_tab:
+        gd = st.session_state.garmin_defaults
+        has_garmin = bool(gd)
+
+        # if has_garmin:
+        #     st.caption("Inputs auto-filled from Garmin data. Adjust as needed.")
+
+        training_type = st.selectbox(
+            "Training type",
+            options=list(TRAINING_TYPES.keys()),
+            index=None,
+            placeholder="Select a training type...",
         )
-        st.session_state.quick_prompt = (
-            "Based on my recent training history, recommend the best workout for today. "
-            "Consider what type of session would complement my recent runs and help me "
-            "improve. Explain your reasoning, then create the workout." + time_hint
+        available_minutes = st.number_input(
+            "Available time (min)",
+            min_value=0,
+            max_value=180,
+            value=0,
+            step=5,
+            help="Leave at 0 to let the coach decide",
         )
 
-    if analyse_clicked:
-        st.session_state.quick_prompt = (
-            "Provide a detailed analysis of my recent training history. Include:\n"
-            "1. **Volume overview**: total runs, total distance, weekly mileage trend\n"
-            "2. **Intensity distribution**: breakdown of easy vs moderate vs hard sessions "
-            "based on pace and heart rate\n"
-            "3. **Training effect analysis**: average aerobic & anaerobic TE, how many sessions "
-            "were recovery, maintaining, improving, or highly improving\n"
-            "4. **Pace progression**: are my paces improving, plateauing, or declining?\n"
-            "5. **Heart rate trends**: is aerobic efficiency improving (same pace at lower HR)?\n"
-            "6. **Recovery patterns**: am I allowing enough recovery between hard sessions?\n"
-            "7. **Strengths & weaknesses**: what am I doing well and what needs attention?\n"
-            "8. **Recommendations**: specific actionable advice for the next 1-2 weeks\n\n"
-            "Be specific with numbers and dates from my data."
+        goal = st.selectbox(
+            "Training goal",
+            [
+                "Build aerobic base",
+                "Raise lactate threshold",
+                "Improve race speed",
+                "Build strength & power",
+            ],
+            key="suggest_goal",
         )
+
+        fatigue = st.select_slider(
+            "How do your legs feel?",
+            options=[1, 2, 3, 4, 5],
+            value=gd.get("fatigue", 2),
+            format_func=lambda x: {
+                1: "1 - Fresh",
+                2: "2 - Good",
+                3: "3 - OK",
+                4: "4 - Tired",
+                5: "5 - Cooked",
+            }[x],
+            key="suggest_fatigue",
+        )
+
+        if st.button("Generate Workout", use_container_width=True, type="primary"):
+            parts = []
+            if training_type:
+                parts.append(TRAINING_TYPES[training_type])
+            else:
+                parts.append("Create a running workout")
+            if available_minutes > 0:
+                parts.append(
+                    f"for {available_minutes} minutes total. "
+                    f"Fit everything (warmup, main set, cooldown) within {available_minutes} minutes"
+                )
+            parts.append(f"My training goal is: {goal}")
+            fatigue_labels = {1: "fresh", 2: "good", 3: "OK", 4: "tired", 5: "cooked"}
+            parts.append(f"My legs feel {fatigue_labels[fatigue]}")
+            st.session_state.quick_prompt = ". ".join(parts) + "."
 
     st.divider()
     st.subheader("Proposed Workouts")
     if not st.session_state.pending_workouts:
         st.caption("No workouts yet. Chat with the coach or generate one above.")
+
+    to_remove = None
     for i, (name, workout, params) in enumerate(st.session_state.pending_workouts):
-        with st.expander(f"{name}", expanded=(i == len(st.session_state.pending_workouts) - 1)):
+        is_latest = i == len(st.session_state.pending_workouts) - 1
+        with st.expander(f"{name}", expanded=is_latest):
+            # Workout summary metrics
             segments = workout.workoutSegments
             if segments:
                 steps = segments[0].workoutSteps
-                st.write(f"**Estimated duration:** {workout.estimatedDurationInSecs // 60} min")
-                st.write(f"**Steps:** {len(steps)}")
+                dur_min = workout.estimatedDurationInSecs // 60
+                m1, m2 = st.columns(2)
+                m1.metric("Duration", f"{dur_min} min")
+                m2.metric("Steps", len(steps))
 
+            # Intensity chart
             if params is not None:
                 fig = plot_workout(params)
                 st.pyplot(fig)
 
+            # Editable name
             custom_name = st.text_input(
                 "Workout name",
                 value=name,
                 key=f"name_{i}",
             )
 
+            # Garmin upload / schedule
             if st.session_state.garmin_client is not None:
                 schedule_date = st.date_input(
                     "Schedule for",
@@ -275,9 +404,9 @@ with workout_col:
                     key=f"date_{i}",
                 )
 
-                upload_col, schedule_col = st.columns(2)
+                upload_col, schedule_col, remove_col = st.columns(3)
                 with upload_col:
-                    if st.button("Upload to Garmin", key=f"upload_{i}"):
+                    if st.button("Upload", key=f"upload_{i}", use_container_width=True):
                         workout.workoutName = custom_name
                         with st.spinner("Uploading..."):
                             try:
@@ -286,7 +415,7 @@ with workout_col:
                             except Exception as e:
                                 st.error(f"Upload failed: {e}")
                 with schedule_col:
-                    if st.button("Upload & Schedule", key=f"schedule_{i}"):
+                    if st.button("Upload & Schedule", key=f"schedule_{i}", use_container_width=True):
                         workout.workoutName = custom_name
                         with st.spinner("Uploading & scheduling..."):
                             try:
@@ -305,8 +434,20 @@ with workout_col:
                                     st.warning("Uploaded but could not schedule — no workout ID returned.")
                             except Exception as e:
                                 st.error(f"Failed: {e}")
+                with remove_col:
+                    if st.button("Remove", key=f"remove_{i}", use_container_width=True):
+                        to_remove = i
             else:
-                st.caption("Connect to Garmin to upload.")
+                rm_col1, rm_col2 = st.columns([3, 1])
+                with rm_col1:
+                    st.caption("Connect to Garmin to upload.")
+                with rm_col2:
+                    if st.button("Remove", key=f"remove_{i}", use_container_width=True):
+                        to_remove = i
+
+    if to_remove is not None:
+        st.session_state.pending_workouts.pop(to_remove)
+        st.rerun()
 
 # ── Left column: Chat ──────────────────────────────────────────────
 with chat_col:
@@ -315,7 +456,7 @@ with chat_col:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-# ── Resolve prompt (quick-generate or chat input) ───────────────────
+# ── Chat input ────────────────────────────────────────────────────
 user_input = st.chat_input("Ask your running coach...")
 prompt = None
 if "quick_prompt" in st.session_state:
@@ -323,17 +464,32 @@ if "quick_prompt" in st.session_state:
 elif user_input:
     prompt = user_input
 
-_SONNET_KEYWORDS = {"create", "generate", "build", "workout", "analyse", "analysis", "recommend", "history"}
+_ANALYSIS_KEYWORDS = {"analyse", "analysis", "history", "training effect", "training load", "review my"}
+_WORKOUT_KEYWORDS = {"create", "generate", "build", "workout", "recommend", "suggest", "recommendation", "training goal"}
 
-def _pick_model(prompt_text: str) -> str:
-    """Use Sonnet for workout creation/analysis, Haiku for conversation."""
+def _pick_mode(prompt_text: str, coach: RunningCoach) -> str:
+    """Pick coach mode (analysis/workout) based on prompt content."""
     lower = prompt_text.lower()
-    if any(kw in lower for kw in _SONNET_KEYWORDS):
-        return MODEL_SONNET
-    return MODEL_HAIKU
+
+    if any(kw in lower for kw in _ANALYSIS_KEYWORDS):
+        return "analysis"
+
+    if any(kw in lower for kw in _WORKOUT_KEYWORDS):
+        return "workout"
+
+    return coach.mode
 
 if prompt:
-    st.session_state.coach.set_model(_pick_model(prompt))
+    coach = st.session_state.coach
+    mode = _pick_mode(prompt, coach)
+
+    # Switch mode if needed
+    if mode != coach.mode:
+        if mode == "analysis":
+            coach.switch_to_analysis()
+        else:
+            coach.switch_to_workout()
+
     st.session_state.messages.append({"role": "user", "content": prompt})
     with chat_col:
         with st.chat_message("user"):

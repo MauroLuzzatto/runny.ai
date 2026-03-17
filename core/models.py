@@ -130,6 +130,51 @@ class Activity(BaseModel):
         return round((self.duration / 60) / (self.distance / 1000), 2)
 
 
+class UserProfile(BaseModel):
+    """Garmin user profile and training metrics."""
+
+    # Physical
+    max_hr: int | None = None
+    resting_hr: int | None = None
+    weight_kg: float | None = None
+    birth_year: int | None = None
+    gender: str | None = None
+
+    # HR zones (list of {zone, low, high})
+    hr_zones: list[dict] | None = None
+
+    # Fitness
+    vo2_max: float | None = None
+    training_load_7d: float | None = None
+    training_status: str | None = None
+    training_readiness: float | None = None
+    lactate_threshold_hr: int | None = None
+
+    # Race predictions (key -> seconds, e.g. {"5k": 1200, "10k": 2500})
+    race_predictions: dict[str, float] | None = None
+
+    def hr_zone_range(self, zone: int) -> str | None:
+        """Return 'low-high' string for a given zone number."""
+        if not self.hr_zones:
+            return None
+        for z in self.hr_zones:
+            if z.get("zone") == zone:
+                return f"{z['low']}-{z['high']}"
+        return None
+
+    def format_race_prediction(self, key: str) -> str | None:
+        """Format a race prediction as mm:ss or h:mm:ss."""
+        if not self.race_predictions or key not in self.race_predictions:
+            return None
+        secs = int(self.race_predictions[key])
+        if secs >= 3600:
+            h, rem = divmod(secs, 3600)
+            m, s = divmod(rem, 60)
+            return f"{h}:{m:02d}:{s:02d}"
+        m, s = divmod(secs, 60)
+        return f"{m}:{s:02d}"
+
+
 class Activities(BaseModel):
     """Collection of activities with query helpers."""
 

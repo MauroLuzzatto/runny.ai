@@ -1,73 +1,13 @@
 from __future__ import annotations
 
-from core.models import Activities, Activity
+from pathlib import Path
 
-SYSTEM_PROMPT = """\
-You are runny.ai, an expert AI running coach. Your role is to help runners improve \
-their performance by creating personalized training workouts.
+from core.models import Activities, Activity, UserProfile
 
-Performance & training effect summary (ALWAYS — when activity data is available):
-When you interact with a runner who has activity data, ALWAYS start by providing a \
-**Performance & Training Effect Summary**. This should include:
-- Total runs and total distance in the recent period
-- Average and best pace (min/km)
-- Average and max heart rate
-- **Training effect analysis**: average aerobic TE, average anaerobic TE, and the \
-distribution across the Garmin scale (how many runs were recovery, maintaining, improving, \
-highly improving). Identify if the runner is under-training, balanced, or overreaching.
-- **Training load balance**: ratio of easy vs. hard sessions, and whether the runner \
-needs more aerobic base, more intensity, or more recovery
-- Notable trends (improving pace, increasing distance, signs of fatigue, etc.)
-- Current estimated fitness level and any observations
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
 
-After the summary, proactively suggest 2-3 optimal workout options for the next session, \
-explaining why each would be beneficial given the recent training pattern. For example:
-- If recent runs are mostly easy/moderate → suggest a threshold or interval session
-- If recent runs are mostly high-intensity → suggest a recovery or easy aerobic run
-- If distance has been increasing → suggest a consolidation week or tempo run
-- If training effect has been stagnant → suggest a progressive overload session
-The runner can then pick one or ask for something different.
-
-Guidelines:
-- ALWAYS end your response with a question or option for the user to respond to. \
-Never leave the conversation at a dead end. Examples: "Would you like me to adjust \
-the intensity?", "Which of these options appeals to you?", "Want me to create this workout?"
-- Ask about the runner's goals, current fitness level, and preferences before prescribing a workout.
-- Explain the rationale behind your workout recommendations.
-- For every workout you propose, include target heart rate zones (in bpm) and target \
-velocity/pace (in min/km) for each phase (warmup, intervals, recovery, cooldown).
-- When ready to create a workout, call one of the available tools.
-
-Workout details (MANDATORY):
-After proposing a workout, you MUST include a Markdown table with these columns: \
-Phase, Duration/Distance, Time Estimate, Target Pace (min/km), Target HR (bpm), HR Zone (1-5). \
-The Time Estimate column should show the estimated duration for each phase (e.g. "10:00", "4:00", "1:30"). \
-Also include a **Total Time** row at the bottom summing all phases. \
-After the table, include a **Prospective Training Effect** section estimating the expected \
-aerobic TE (1.0–5.0) and anaerobic TE (0.0–5.0) for the overall workout, using the Garmin scale:
-- 1.0–1.9: Minor benefit / recovery
-- 2.0–2.9: Maintaining fitness
-- 3.0–3.9: Improving fitness
-- 4.0–4.9: Highly improving fitness
-- 5.0: Overreaching
-Base your estimate on the workout intensity, duration, and the runner's recent training data if available. \
-For each phase specify the appropriate heart rate zone:
-- Zone 1 (50-60% max HR): Recovery / easy walking
-- Zone 2 (60-70% max HR): Easy / warmup / cooldown
-- Zone 3 (70-80% max HR): Moderate / tempo
-- Zone 4 (80-90% max HR): Hard / threshold
-- Zone 5 (90-100% max HR): VO2max / sprint intervals
-A visual intensity chart will be rendered automatically by the app — do NOT include ASCII art.
-
-You have two workout types available:
-
-1. **Simple interval workout** (time-based): Define intervals by duration in seconds. \
-Good for general fitness and when precise pacing isn't critical. \
-Parameters: name, intervals, interval_seconds, recovery_seconds, warmup_seconds, cooldown_seconds.
-
-2. **Advanced interval workout** (distance-based with targets): Define intervals by \
-distance in meters with pace and HR zone targets. Better for race-specific training. \
-Parameters: name, intervals, interval_distance_m, recovery_seconds, warmup_seconds."""
+ANALYSIS_SYSTEM_PROMPT = (_PROMPTS_DIR / "analysis.md").read_text()
+WORKOUT_SYSTEM_PROMPT = (_PROMPTS_DIR / "workout.md").read_text()
 
 
 def _format_run_summary(run: Activity) -> str:
@@ -85,15 +25,90 @@ def _format_run_summary(run: Activity) -> str:
     return ", ".join(parts)
 
 
-def build_system_prompt(activities: Activities | None = None) -> str:
-    """Build the full system prompt, optionally including recent run data."""
-    lines = [SYSTEM_PROMPT]
+def _format_profile(profile: UserProfile) -> str:
+    """Format user profile data for the system prompt."""
+    lines = ["\n\nRunner profile:"]
+    if profile.max_hr:
+        lines.append(f"- Max heart rate: {profile.max_hr} bpm")
+    if profile.resting_hr:
+        lines.append(f"- Resting heart rate: {profile.resting_hr} bpm")
+    if profile.vo2_max:
+        lines.append(f"- VO2max: {profile.vo2_max:.1f}")
+    if profile.training_status:
+        lines.append(f"- Training status: {profile.training_status}")
+    if profile.training_load_7d:
+        lines.append(f"- 7-day training load: {profile.training_load_7d:.0f}")
+    if profile.training_readiness:
+        lines.append(f"- Training readiness score: {profile.training_readiness:.0f}")
+    if profile.lactate_threshold_hr:
+        lines.append(f"- Lactate threshold HR: {profile.lactate_threshold_hr} bpm")
+    if profile.weight_kg:
+        lines.append(f"- Weight: {profile.weight_kg} kg")
+    if profile.hr_zones:
+        zones_str = ", ".join(
+            f"Z{z['zone']}: {z['low']}-{z['high']}"
+            for z in profile.hr_zones
+        )
+        lines.append(f"- HR zones: {zones_str}")
+    if profile.race_predictions:
+        preds = []
+        for key in ["5k", "10k", "half_marathon", "marathon"]:
+            fmt = profile.format_race_prediction(key)
+            if fmt:
+                preds.append(f"{key}: {fmt}")
+        if preds:
+            lines.append(f"- Race predictions: {', '.join(preds)}")
+    return "\n".join(lines)
+
+
+def _format_activities(activities: Activities) -> str:
+    """Format recent run data for the system prompt."""
+    runs = activities.runs()
+    if not runs:
+        return ""
+    lines = ["\n\nRecent runs:\n"]
+    for run in runs[:20]:
+        lines.append(_format_run_summary(run))
+    return "\n".join(lines)
+
+
+def build_analysis_prompt(
+    activities: Activities | None = None,
+    profile: UserProfile | None = None,
+) -> str:
+    """Build the system prompt for training history analysis."""
+    lines = [ANALYSIS_SYSTEM_PROMPT]
+
+    if profile:
+        lines.append(_format_profile(profile))
 
     if activities:
-        runs = activities.runs()
-        if runs:
-            lines.append("\n\nRecent runs:\n")
-            for run in runs[:20]:
-                lines.append(_format_run_summary(run))
+        lines.append(_format_activities(activities))
+
+    return "\n".join(lines)
+
+
+def build_workout_prompt(
+    training_summary: str,
+    activities: Activities | None = None,
+    profile: UserProfile | None = None,
+) -> str:
+    """Build the system prompt for workout creation.
+
+    Args:
+        training_summary: The analysis from the analysis step, injected
+            so the workout coach has full context.
+        activities: Optional activities for raw data reference.
+        profile: Optional user profile for HR zones etc.
+    """
+    lines = [WORKOUT_SYSTEM_PROMPT]
+
+    if profile:
+        lines.append(_format_profile(profile))
+
+    lines.append(f"\n\nTraining history analysis:\n{training_summary}")
+
+    if activities:
+        lines.append(_format_activities(activities))
 
     return "\n".join(lines)

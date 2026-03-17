@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from garminconnect.workout import RunningWorkout
 
-from core.models import Activities
-from core.prompts import build_system_prompt
+from core.models import Activities, UserProfile
+from core.prompts import build_analysis_prompt, build_workout_prompt
 from core.schemas import (
     AdvancedIntervalParams,
     SimpleIntervalParams,
@@ -19,8 +19,7 @@ from core.schemas import (
 
 load_dotenv()
 
-MODEL_SONNET = "anthropic/claude-sonnet-4-6"
-MODEL_HAIKU = "anthropic/claude-haiku-4-5"
+MODEL = "anthropic/claude-sonnet-4-6"
 MAX_RETRIES = 3
 
 TOOLS = [
@@ -50,30 +49,73 @@ TOOLS = [
 
 
 class RunningCoach:
-    """AI running coach that creates personalized workouts via tool-use chat."""
+    """AI running coach with two modes: analysis and workout creation.
+
+    The analysis mode evaluates training history (no tools).
+    The workout mode creates workouts informed by a training summary (with tools).
+    """
 
     def __init__(
-        self, activities: Activities | None = None, model: str = MODEL_SONNET
+        self,
+        activities: Activities | None = None,
+        profile: UserProfile | None = None,
     ) -> None:
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=os.getenv("OPENROUTER_KEY"),
         )
-        self.model = model
+        self.activities = activities
+        self.profile = profile
+        self.training_summary: str | None = None
+        self._mode: str = "analysis"
         self.messages: list[dict] = [
-            {"role": "system", "content": build_system_prompt(activities)},
+            {"role": "system", "content": build_analysis_prompt(activities, profile)},
         ]
 
-    def set_model(self, model: str) -> None:
-        """Switch between Sonnet and Haiku."""
-        self.model = model
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def switch_to_analysis(self) -> None:
+        """Switch to analysis mode, resetting the conversation."""
+        self._mode = "analysis"
+        self.messages = [
+            {"role": "system", "content": build_analysis_prompt(self.activities, self.profile)},
+        ]
+
+    def switch_to_workout(self, training_summary: str | None = None) -> None:
+        """Switch to workout mode with a training summary.
+
+        Args:
+            training_summary: The analysis text to inform workout creation.
+                If None, uses the stored training_summary from a prior analysis.
+        """
+        if training_summary is not None:
+            self.training_summary = training_summary
+        summary = self.training_summary or ""
+        self._mode = "workout"
+        self.messages = [
+            {
+                "role": "system",
+                "content": build_workout_prompt(summary, self.activities, self.profile),
+            },
+        ]
 
     def update_activities(self, activities: Activities) -> None:
-        """Rebuild the system prompt with fresh activity data."""
-        self.messages[0] = {
-            "role": "system",
-            "content": build_system_prompt(activities),
-        }
+        """Update activities and rebuild the current system prompt."""
+        self.activities = activities
+        if self._mode == "analysis":
+            self.messages[0] = {
+                "role": "system",
+                "content": build_analysis_prompt(activities, self.profile),
+            }
+        else:
+            self.messages[0] = {
+                "role": "system",
+                "content": build_workout_prompt(
+                    self.training_summary or "", activities, self.profile
+                ),
+            }
 
     def chat(
         self, user_message: str
@@ -83,16 +125,20 @@ class RunningCoach:
 
         workout = None
         workout_params = None
+        use_tools = self._mode == "workout"
 
         for _ in range(5):
-            response = self._call_api(stream=False)
+            response = self._call_api(stream=False, use_tools=use_tools)
             choice = response.choices[0]
             message = choice.message
 
             self.messages.append(message.model_dump(exclude_none=True))
 
             if not message.tool_calls:
-                return message.content or "", workout, workout_params
+                text = message.content or ""
+                if self._mode == "analysis":
+                    self.training_summary = text
+                return text, workout, workout_params
 
             workout, workout_params = self._handle_tool_calls(message.tool_calls)
 
@@ -103,9 +149,10 @@ class RunningCoach:
     ) -> Generator[str | tuple[RunningWorkout, SimpleIntervalParams | AdvancedIntervalParams], None, None]:
         """Streaming chat. Yields text chunks, then optionally a (workout, params) tuple."""
         self.messages.append({"role": "user", "content": user_message})
+        use_tools = self._mode == "workout"
 
         for _ in range(5):
-            stream = self._call_api(stream=True)
+            stream = self._call_api(stream=True, use_tools=use_tools)
 
             full_content = ""
             tool_calls_data: dict[int, dict] = {}
@@ -146,6 +193,8 @@ class RunningCoach:
 
             # No tool calls — done
             if not tool_calls_data:
+                if self._mode == "analysis":
+                    self.training_summary = full_content
                 return
 
             # Handle tool calls and loop for the summary
@@ -203,17 +252,20 @@ class RunningCoach:
         })
         return workout, params
 
-    def _call_api(self, stream: bool = False):
+    def _call_api(self, stream: bool = False, use_tools: bool = True):
         """Call the OpenRouter API with retry logic."""
+        kwargs: dict = {
+            "model": MODEL,
+            "messages": self.messages,
+            "stream": stream,
+            "max_tokens": 2048,
+        }
+        if use_tools:
+            kwargs["tools"] = TOOLS
+
         for attempt in range(MAX_RETRIES):
             try:
-                return self.client.chat.completions.create(
-                    model=self.model,
-                    messages=self.messages,
-                    tools=TOOLS,
-                    stream=stream,
-                    max_tokens=2048,
-                )
+                return self.client.chat.completions.create(**kwargs)
             except Exception:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(2 ** attempt)
