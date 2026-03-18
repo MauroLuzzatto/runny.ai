@@ -41,6 +41,14 @@ if "active_chat_tab" not in st.session_state:
 
 # ── Sidebar: Garmin connection ──────────────────────────────────────
 with st.sidebar:
+    with st.expander("Getting Started"):
+        st.markdown(
+            "**runny.ai** connects to your Garmin account to:\n"
+            "- Analyse your training history & trends\n"
+            "- Generate personalized workouts with pace & HR targets\n"
+            "- Upload & schedule workouts directly to Garmin Connect\n\n"
+            "Connect below, then load your activities and profile."
+        )
     st.header("Garmin Connect")
 
     st.caption("Use your Garmin Connect account credentials to log in.")
