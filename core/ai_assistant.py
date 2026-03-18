@@ -77,7 +77,10 @@ class RunningCoach:
         """Switch to analysis mode, resetting the conversation."""
         self._mode = "analysis"
         self.messages = [
-            {"role": "system", "content": build_analysis_prompt(self.activities, self.profile)},
+            {
+                "role": "system",
+                "content": build_analysis_prompt(self.activities, self.profile),
+            },
         ]
 
     def switch_to_workout(self, training_summary: str | None = None) -> None:
@@ -116,7 +119,9 @@ class RunningCoach:
 
     def chat(
         self, user_message: str
-    ) -> tuple[str, RunningWorkout | None, SimpleIntervalParams | AdvancedIntervalParams | None]:
+    ) -> tuple[
+        str, RunningWorkout | None, SimpleIntervalParams | AdvancedIntervalParams | None
+    ]:
         """Non-streaming chat. Returns (text, workout, params)."""
         self.messages.append({"role": "user", "content": user_message})
 
@@ -143,7 +148,11 @@ class RunningCoach:
 
     def chat_stream(
         self, user_message: str
-    ) -> Generator[str | tuple[RunningWorkout, SimpleIntervalParams | AdvancedIntervalParams], None, None]:
+    ) -> Generator[
+        str | tuple[RunningWorkout, SimpleIntervalParams | AdvancedIntervalParams],
+        None,
+        None,
+    ]:
         """Streaming chat. Yields text chunks, then optionally a (workout, params) tuple."""
         self.messages.append({"role": "user", "content": user_message})
         use_tools = self._mode == "workout"
@@ -175,9 +184,13 @@ class RunningCoach:
                             tool_calls_data[idx]["id"] = tc.id
                         if tc.function:
                             if tc.function.name:
-                                tool_calls_data[idx]["function"]["name"] = tc.function.name
+                                tool_calls_data[idx]["function"]["name"] = (
+                                    tc.function.name
+                                )
                             if tc.function.arguments:
-                                tool_calls_data[idx]["function"]["arguments"] += tc.function.arguments
+                                tool_calls_data[idx]["function"]["arguments"] += (
+                                    tc.function.arguments
+                                )
 
             # Append assistant message to history
             assistant_msg: dict = {"role": "assistant", "content": full_content or None}
@@ -199,7 +212,11 @@ class RunningCoach:
             if workout:
                 yield (workout, params)
 
-    def _handle_tool_calls(self, tool_calls) -> tuple[RunningWorkout | None, SimpleIntervalParams | AdvancedIntervalParams | None]:
+    def _handle_tool_calls(
+        self, tool_calls
+    ) -> tuple[
+        RunningWorkout | None, SimpleIntervalParams | AdvancedIntervalParams | None
+    ]:
         """Process tool calls from a non-streaming response."""
         workout = None
         workout_params = None
@@ -211,7 +228,11 @@ class RunningCoach:
 
         return workout, workout_params
 
-    def _handle_tool_calls_from_dicts(self, tool_calls_data: dict[int, dict]) -> tuple[RunningWorkout | None, SimpleIntervalParams | AdvancedIntervalParams | None]:
+    def _handle_tool_calls_from_dicts(
+        self, tool_calls_data: dict[int, dict]
+    ) -> tuple[
+        RunningWorkout | None, SimpleIntervalParams | AdvancedIntervalParams | None
+    ]:
         """Process tool calls from streaming chunks."""
         workout = None
         workout_params = None
@@ -223,30 +244,40 @@ class RunningCoach:
 
         return workout, workout_params
 
-    def _execute_tool(self, fn_name: str, args: dict, tool_call_id: str) -> tuple[RunningWorkout | None, SimpleIntervalParams | AdvancedIntervalParams | None]:
+    def _execute_tool(
+        self, fn_name: str, args: dict, tool_call_id: str
+    ) -> tuple[
+        RunningWorkout | None, SimpleIntervalParams | AdvancedIntervalParams | None
+    ]:
         """Execute a single tool call and append the result to messages."""
         if fn_name == "create_simple_interval_workout":
             params = SimpleIntervalParams(**args)
         elif fn_name == "create_advanced_interval_workout":
             params = AdvancedIntervalParams(**args)
         else:
-            self.messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": json.dumps({"error": f"Unknown tool: {fn_name}"}),
-            })
+            self.messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": json.dumps({"error": f"Unknown tool: {fn_name}"}),
+                }
+            )
             return None, None
 
         workout = build_workout_from_params(params)
-        self.messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": json.dumps({
-                "status": "success",
-                "workout_name": params.name,
-                "parameters": params.model_dump(),
-            }),
-        })
+        self.messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": json.dumps(
+                    {
+                        "status": "success",
+                        "workout_name": params.name,
+                        "parameters": params.model_dump(),
+                    }
+                ),
+            }
+        )
         return workout, params
 
     def _call_api(self, stream: bool = False, use_tools: bool = True):
@@ -255,16 +286,17 @@ class RunningCoach:
             "model": MODEL,
             "messages": self.messages,
             "stream": stream,
-            "max_tokens": 2048,
+            "max_tokens": 4096,
         }
         if use_tools:
             kwargs["tools"] = TOOLS
+            kwargs["tool_choice"] = "auto"
 
         for attempt in range(MAX_RETRIES):
             try:
                 return self.client.chat.completions.create(**kwargs)
             except Exception:
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                 else:
                     raise
