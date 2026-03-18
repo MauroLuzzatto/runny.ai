@@ -8,11 +8,11 @@ from garminconnect import Garmin
 def _login(email: str, password: str) -> Garmin:
     email_hash = hashlib.md5(email.encode()).hexdigest()[:8]
     tokenstore = f"/tmp/garmin_tokens_{email_hash}"
+    token_file = os.path.join(tokenstore, "oauth1_token.json")
     client = Garmin(email, password)
-    try:
+    if os.path.exists(token_file):
         client.login(tokenstore)
-    except FileNotFoundError:
-        # No saved tokens yet — do a fresh login and persist for next time
+    else:
         client.login()
         os.makedirs(tokenstore, exist_ok=True)
         client.garth.dump(tokenstore)
