@@ -1,19 +1,13 @@
-import os
-
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 
 from datetime import date, timedelta
 
 from core import fetch_activities, fetch_user_profile, get_client, schedule_workout, upload_workout
-from core.schemas import SimpleIntervalParams, AdvancedIntervalParams
 from core.ai_assistant import RunningCoach
 from core.models import Activities
 from core.plotting import plot_workout
 from core.suggestions import derive_inputs_from_garmin
-
-load_dotenv()
 
 st.set_page_config(page_title="runny.ai", layout="wide")
 
@@ -39,8 +33,8 @@ if "user_profile" not in st.session_state:
 with st.sidebar:
     st.header("Garmin Connect")
 
-    email = st.text_input("Email", value=os.getenv("GARMIN_EMAIL", ""))
-    password = st.text_input("Password", value=os.getenv("GARMIN_PASSWORD", ""), type="password")
+    email = st.text_input("Email", value=st.secrets.get("GARMIN_EMAIL", ""))
+    password = st.text_input("Password", value=st.secrets.get("GARMIN_PASSWORD", ""), type="password")
 
     if st.button("Connect", use_container_width=True):
         with st.spinner("Connecting to Garmin..."):

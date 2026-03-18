@@ -10,5 +10,6 @@ fit_files/
 # Virtual environments
 .venv
 
-# Environment variables
+# Environment variables / secrets
 .env
+.streamlit/secrets.toml

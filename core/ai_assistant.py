@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Generator
 
-from dotenv import load_dotenv
+import streamlit as st
 from openai import OpenAI
 from garminconnect.workout import RunningWorkout
 
@@ -16,8 +15,6 @@ from core.schemas import (
     SimpleIntervalParams,
     build_workout_from_params,
 )
-
-load_dotenv()
 
 MODEL = "anthropic/claude-sonnet-4-6"
 MAX_RETRIES = 3
@@ -62,7 +59,7 @@ class RunningCoach:
     ) -> None:
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=os.getenv("OPENROUTER_KEY"),
+            api_key=st.secrets.get("OPENROUTER_KEY"),
         )
         self.activities = activities
         self.profile = profile
