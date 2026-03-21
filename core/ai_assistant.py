@@ -201,16 +201,54 @@ class RunningCoach:
                 ]
             self.messages.append(assistant_msg)
 
-            # No tool calls — done
+            # No tool calls
             if not tool_calls_data:
                 if self._mode == "analysis":
                     self.training_summary = full_content
-                return
+                    return
+                # In workout mode: force a tool call via a non-streaming follow-up
+                tool_calls_data = self._force_tool_call()
+                if not tool_calls_data:
+                    return
 
             # Handle tool calls and loop for the summary
             workout, params = self._handle_tool_calls_from_dicts(tool_calls_data)
             if workout:
                 yield (workout, params)
+
+    def _force_tool_call(self) -> dict[int, dict]:
+        """Force the LLM to produce a tool call based on the conversation so far.
+
+        Makes a non-streaming API call with tool_choice='required' so the model
+        must call one of the workout creation tools. Returns tool_calls_data dict
+        in the same format as the streaming parser, or empty dict on failure.
+        """
+        self.messages.append(
+            {
+                "role": "user",
+                "content": "Now create the workout based on what you just described.",
+            }
+        )
+        try:
+            response = self._call_api(stream=False, use_tools=True, force_tool=True)
+            message = response.choices[0].message
+            self.messages.append(message.model_dump(exclude_none=True))
+
+            if not message.tool_calls:
+                return {}
+
+            return {
+                i: {
+                    "id": tc.id,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for i, tc in enumerate(message.tool_calls)
+            }
+        except Exception:
+            return {}
 
     def _handle_tool_calls(
         self, tool_calls
@@ -280,7 +318,9 @@ class RunningCoach:
         )
         return workout, params
 
-    def _call_api(self, stream: bool = False, use_tools: bool = True):
+    def _call_api(
+        self, stream: bool = False, use_tools: bool = True, force_tool: bool = False
+    ):
         """Call the OpenRouter API with retry logic."""
         kwargs: dict = {
             "model": MODEL,
@@ -290,7 +330,7 @@ class RunningCoach:
         }
         if use_tools:
             kwargs["tools"] = TOOLS
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = "required" if force_tool else "auto"
 
         for attempt in range(MAX_RETRIES):
             try:

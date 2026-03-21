@@ -17,6 +17,13 @@ from core.suggestions import derive_inputs_from_garmin
 
 st.set_page_config(page_title="runny.ai", layout="wide")
 
+# ── Privacy policy page (accessed via ?page=privacy) ─────────────
+if st.query_params.get("page") == "privacy":
+    from pathlib import Path
+
+    st.title("Privacy Policy — Runny.AI")
+    st.markdown(Path("docs/PRIVACY.md").read_text())
+    st.stop()
 
 # ── Session state defaults ──────────────────────────────────────────
 if "analysis_messages" not in st.session_state:
@@ -41,14 +48,12 @@ if "active_chat_tab" not in st.session_state:
 
 # ── Sidebar: Garmin connection ──────────────────────────────────────
 with st.sidebar:
-    with st.expander("Getting Started"):
-        st.markdown(
-            "**runny.ai** connects to your Garmin account to:\n"
-            "- Analyse your training history & trends\n"
-            "- Generate personalized workouts with pace & HR targets\n"
-            "- Upload & schedule workouts directly to Garmin Connect\n\n"
-            "Connect below, then load your activities and profile."
-        )
+    st.markdown(
+        "**runny.ai** connects to your Garmin account to analyse your "
+        "training, generate personalized workouts, and upload them "
+        "directly to Garmin Connect. &nbsp; [Privacy Policy](?page=privacy)",
+        unsafe_allow_html=True,
+    )
     st.header("Garmin Connect")
 
     st.caption("Use your Garmin Connect account credentials to log in.")
@@ -92,7 +97,7 @@ with st.sidebar:
         st.session_state.garmin_client is not None
         and st.session_state.user_profile is None
     ):
-        if st.button("Load Profile (HR, VO2max, zones...)", use_container_width=True):
+        if st.button("Load Profile (optional)", use_container_width=True):
             with st.spinner("Fetching profile data..."):
                 try:
                     profile = fetch_user_profile(st.session_state.garmin_client)
@@ -354,11 +359,8 @@ with workout_col:
                         "to set precise pace and HR targets for each phase."
                     )
             st.session_state.quick_prompt = (
-                "Based on the training analysis, recommend the best workout "
-                "for today. Briefly explain your reasoning, then IMMEDIATELY "
-                "call the create_simple_interval_workout or "
-                "create_advanced_interval_workout tool to build it. "
-                "Do not just describe the workout — you must call the tool."
+                "Based on the training analysis, recommend and create "
+                "the best workout for today. Briefly explain your reasoning."
                 + profile_hint
             )
 
@@ -425,7 +427,6 @@ with workout_col:
             parts.append(f"My training goal is: {goal}")
             fatigue_labels = {1: "fresh", 2: "good", 3: "OK", 4: "tired", 5: "cooked"}
             parts.append(f"My legs feel {fatigue_labels[fatigue]}")
-            parts.append("Call the tool to create the workout immediately")
             st.session_state.quick_prompt = ". ".join(parts) + "."
 
     st.divider()
