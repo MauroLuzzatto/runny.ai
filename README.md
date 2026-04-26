@@ -16,8 +16,9 @@ Built with [Streamlit](https://streamlit.io/), [Claude](https://www.anthropic.co
 
 ## Demo
 
-<!-- TODO: Replace with actual demo GIF -->
-![Demo](demo.gif)
+Load your Garmin data, chat with your AI coach, get a personalized workout, and upload it to your Garmin watch — all in one flow:
+
+![Demo](logo/demo.gif)
 
 ## Features
 
