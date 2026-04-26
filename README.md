@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
 </p>
 
-**Runny.AI** connects to your Garmin account, analyzes your training history, and generates personalized running workouts — then uploads them directly to your Garmin watch.
+**Runny.AI** connects to your Garmin account, analyzes your training history, and lets you chat with an AI coach about your data to generate personalized running workouts — then uploads them directly to your Garmin watch.
 
 Built with [Streamlit](https://streamlit.io/), [Claude](https://www.anthropic.com/) (via [OpenRouter](https://openrouter.ai/)), and [garminconnect](https://github.com/cyberjunky/python-garminconnect).
 
@@ -20,20 +20,21 @@ Load your Garmin data, chat with your AI coach, get a personalized workout, and 
 
 ![Demo](logo/demo.gif)
 
-## Features
-
-- **Training Analysis** — Runny.AI fetches your recent runs from Garmin Connect and provides insights on volume, intensity distribution, pace trends, and heart rate efficiency
-- **Personalized Workouts** — Runny.AI generates structured interval and steady-state workouts tailored to your fitness level, training history, and race goals
-- **Garmin Integration** — Upload workouts directly to Garmin Connect and schedule them on your calendar
-- **Runner Profile** — Runny.AI pulls VO2max, HR zones, training load, race predictions, and more from your Garmin data
-- **Race Goal Planning** — Set a target race (5K to marathon) with a goal time, and Runny.AI adapts recommendations accordingly
-
 ## How It Works
 
-1. **Connect** your Garmin account and load your activity history
-2. **Analyze** your training — Runny.AI reviews your recent runs and identifies strengths, weaknesses, and trends
-3. **Generate** ask for the optimal workout or describe what you need ("tempo run", "long easy run", "VO2max intervals") and Runny.AI creates a structured session with appropriate paces and HR targets
-4. **Upload** the workout to Garmin Connect and optionally schedule it for a specific date
+1. **Fetch** — Connect your Garmin account and load your recent activities, VO2max, heart rate zones, training load, and race predictions
+2. **Analyze** — Runny.AI reviews your training history and builds a runner profile with insights on volume, intensity distribution, pace trends, and heart rate efficiency
+3. **Chat** — Ask your AI coach for advice or a workout ("tempo run", "long easy run", "VO2max intervals") — it knows your fitness level and tailors every response to your data
+4. **Generate** — Runny.AI creates a structured workout with phases, target paces, and HR zones that you can review before uploading
+5. **Upload** — Send the workout directly to Garmin Connect and schedule it on your calendar — ready on your watch
+
+## Features
+
+- **Training Analysis** — Insights on volume, intensity distribution, pace trends, and heart rate efficiency based on your recent runs
+- **Personalized Workouts** — Structured interval and steady-state workouts tailored to your fitness level, training history, and race goals
+- **Garmin Integration** — Upload workouts directly to Garmin Connect and schedule them on your calendar
+- **Runner Profile** — VO2max, HR zones, training load, race predictions, and more pulled from your Garmin data
+- **Race Goal Planning** — Set a target race (5K to marathon) with a goal time, and Runny.AI adapts recommendations accordingly
 
 ## Setup
 
