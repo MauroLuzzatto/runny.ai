@@ -1,7 +1,9 @@
+import logging
+import warnings
+
 import pandas as pd
 import streamlit as st
-
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from core import (
     fetch_activities,
@@ -10,10 +12,20 @@ from core import (
     schedule_workout,
     upload_workout,
 )
+from core import ms_to_pace
 from core.ai_assistant import RunningCoach
 from core.models import Activities
-from core.plotting import plot_workout
-from core.suggestions import derive_inputs_from_garmin
+
+
+warnings.filterwarnings("ignore", message=".*use_container_width.*")
+
+logger = logging.getLogger("runny")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
+
+# Suppress Streamlit's use_container_width deprecation log
+for _name in logging.Logger.manager.loggerDict:
+    if _name.startswith("streamlit"):
+        logging.getLogger(_name).setLevel(logging.ERROR)
 
 st.set_page_config(page_title="runny.ai", layout="wide")
 
@@ -38,8 +50,6 @@ if "activities" not in st.session_state:
     st.session_state.activities = None
 if "pending_workouts" not in st.session_state:
     st.session_state.pending_workouts = []
-if "garmin_defaults" not in st.session_state:
-    st.session_state.garmin_defaults = {}
 if "user_profile" not in st.session_state:
     st.session_state.user_profile = None
 if "active_chat_tab" not in st.session_state:
@@ -54,6 +64,14 @@ with st.sidebar:
         "directly to Garmin Connect. &nbsp; [Privacy Policy](?page=privacy)",
         unsafe_allow_html=True,
     )
+    st.header("OpenRouter API")
+    openrouter_key = st.text_input(
+        "API Key",
+        value=st.secrets.get("OPENROUTER_KEY", ""),
+        type="password",
+        key="openrouter_key",
+    )
+
     st.header("Garmin Connect")
 
     st.caption("Use your Garmin Connect account credentials to log in.")
@@ -67,8 +85,10 @@ with st.sidebar:
             try:
                 client = get_client(email=email, password=password)
                 st.session_state.garmin_client = client
+                logger.info("Garmin connected successfully")
                 st.success("Connected!")
             except Exception as e:
+                logger.error("Garmin connection failed: %s", e)
                 st.error(f"Connection failed: {e}")
 
     st.divider()
@@ -77,16 +97,22 @@ with st.sidebar:
         st.session_state.garmin_client is not None
         and st.session_state.activities is None
     ):
+        st.caption(
+            "Loads last 2 months of activities: distance, pace, heart rate, "
+            "training effect, cadence, power. No GPS or personal data is sent."
+        )
         if st.button("Load Activities (optional)", use_container_width=True):
             with st.spinner("Fetching activities..."):
                 try:
                     raw = fetch_activities(st.session_state.garmin_client, limit=100)
+                    logger.info(
+                        "Loaded %d activities (%d runs)",
+                        len(raw.items),
+                        len(raw.runs()),
+                    )
                     st.session_state.activities = raw
                     st.session_state.coach = RunningCoach(
                         activities=raw, profile=st.session_state.user_profile
-                    )
-                    st.session_state.garmin_defaults = derive_inputs_from_garmin(
-                        raw, profile=st.session_state.user_profile
                     )
                     st.success("Activities loaded!")
                     st.rerun()
@@ -97,25 +123,45 @@ with st.sidebar:
         st.session_state.garmin_client is not None
         and st.session_state.user_profile is None
     ):
+        st.caption(
+            "Loads max/resting HR, VO2max, HR zones, training load & status, "
+            "lactate threshold, race predictions. No personal identifiers."
+        )
         if st.button("Load Profile (optional)", use_container_width=True):
             with st.spinner("Fetching profile data..."):
                 try:
                     profile = fetch_user_profile(st.session_state.garmin_client)
+                    logger.info(
+                        "Profile loaded: max_hr=%s, vo2=%s, lt_hr=%s",
+                        profile.max_hr,
+                        profile.vo2_max,
+                        profile.lactate_threshold_hr,
+                    )
                     st.session_state.user_profile = profile
                     # Rebuild coach with profile data
                     st.session_state.coach = RunningCoach(
                         activities=st.session_state.activities,
                         profile=profile,
                     )
-                    # Re-derive defaults with real max HR and readiness
-                    if st.session_state.activities:
-                        st.session_state.garmin_defaults = derive_inputs_from_garmin(
-                            st.session_state.activities, profile=profile
-                        )
                     st.success("Profile loaded!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Failed to load profile: {e}")
+
+    # ── Data loaded info ──────────────────────────────────────────
+    if st.session_state.activities is not None:
+        activities_all: Activities = st.session_state.activities
+        all_items = activities_all.items
+        runs_all = activities_all.runs()
+        if all_items:
+            dates = sorted(a.start_time_local for a in all_items)
+            earliest = dates[0].strftime("%b %d, %Y")
+            latest = dates[-1].strftime("%b %d, %Y")
+            days = (dates[-1] - dates[0]).days
+            st.caption(
+                f"Activities loaded: {len(all_items)} total "
+                f"({len(runs_all)} runs) | {earliest} - {latest} ({days} days)"
+            )
 
     if st.session_state.user_profile is not None:
         profile = st.session_state.user_profile
@@ -164,22 +210,37 @@ with st.sidebar:
     if st.session_state.activities is not None:
         st.divider()
         activities: Activities = st.session_state.activities
-        two_months_ago = datetime.now() - timedelta(days=60)
-        runs = [r for r in activities.runs() if r.start_time_local >= two_months_ago]
+        runs = activities.runs()
         if runs:
             # Summary metrics
-            st.subheader(f"Running Summary ({len(runs)} runs, last 2 months)")
+            st.subheader(f"Running Summary ({len(runs)} runs)")
             total_km = sum(r.distance_km or 0 for r in runs)
+            total_duration_min = sum(r.duration_min for r in runs)
+            total_hours = int(total_duration_min // 60)
+            total_mins = int(total_duration_min % 60)
             avg_pace = sum(r.pace_min_per_km for r in runs if r.pace_min_per_km) / max(
                 sum(1 for r in runs if r.pace_min_per_km), 1
             )
+            pace_min = int(avg_pace)
+            pace_sec = int((avg_pace - pace_min) * 60)
             avg_hr = sum(r.average_hr for r in runs if r.average_hr) / max(
                 sum(1 for r in runs if r.average_hr), 1
             )
+            avg_cadence = sum(r.avg_cadence for r in runs if r.avg_cadence) / max(
+                sum(1 for r in runs if r.avg_cadence), 1
+            )
+            total_elev = sum(r.elevation_gain or 0 for r in runs)
+            total_calories = sum(r.calories or 0 for r in runs)
+
             m1, m2, m3 = st.columns(3)
             m1.metric("Total Distance", f"{total_km:.1f} km")
-            m2.metric("Avg Pace", f"{avg_pace:.2f} min/km")
+            m2.metric("Avg Pace", f"{pace_min}:{pace_sec:02d} /km")
             m3.metric("Avg HR", f"{avg_hr:.0f} bpm")
+
+            m4, m5, m6 = st.columns(3)
+            m4.metric("Total Time", f"{total_hours}h {total_mins}m")
+            m5.metric("Avg Cadence", f"{avg_cadence:.0f} spm")
+            m6.metric("Elevation Gain", f"{total_elev:.0f} m")
 
             # Build dataframe for charts
             df = pd.DataFrame(
@@ -220,6 +281,63 @@ with st.sidebar:
         else:
             st.info("No running activities found.")
 
+    # ── Race goal ─────────────────────────────────────────────────
+    st.divider()
+    st.header("Race Goal")
+    st.caption("Set a target race to guide workout recommendations.")
+    race_options = ["None", "5K", "10K", "Half Marathon", "Marathon"]
+    default_race = st.secrets.get("RACE_TYPE", "")
+    default_race_idx = (
+        race_options.index(default_race) if default_race in race_options else 0
+    )
+    race_type = st.selectbox(
+        "Race distance",
+        race_options,
+        index=default_race_idx,
+        key="race_type",
+    )
+    race_date = None
+    race_time_target = None
+    if race_type != "None":
+        default_date_str = st.secrets.get("RACE_DATE", "")
+        if default_date_str:
+            try:
+                default_date = date.fromisoformat(default_date_str)
+            except ValueError:
+                default_date = date.today() + timedelta(days=60)
+        else:
+            default_date = date.today() + timedelta(days=60)
+        race_date = st.date_input(
+            "Race date",
+            value=default_date,
+            min_value=date.today(),
+            key="race_date",
+        )
+        race_time_target = st.text_input(
+            "Target time (optional, e.g. 25:00 or 1:45:00)",
+            value=st.secrets.get("RACE_TIME_TARGET", ""),
+            key="race_time_target",
+        )
+    # Store in session state for prompt building
+    st.session_state.race_goal = {
+        "race_type": race_type if race_type != "None" else None,
+        "race_date": str(race_date) if race_date and race_type != "None" else None,
+        "race_time_target": race_time_target or None,
+    }
+
+
+def _build_race_goal_hint() -> str:
+    """Build a prompt hint from the race goal settings."""
+    goal = st.session_state.get("race_goal", {})
+    if not goal or not goal.get("race_type"):
+        return ""
+    parts = [f"I'm training for a {goal['race_type']}"]
+    if goal.get("race_date"):
+        parts.append(f"on {goal['race_date']}")
+    if goal.get("race_time_target"):
+        parts.append(f"with a target time of {goal['race_time_target']}")
+    return " " + ". ".join(parts) + ". Tailor the workout to this goal."
+
 
 # ── Main area ───────────────────────────────────────────────────────
 title_col, clear_col = st.columns([5, 1])
@@ -228,6 +346,7 @@ with title_col:
 with clear_col:
     st.write("")  # vertical spacer to align with title
     if st.button("Clear Chat", use_container_width=True):
+        logger.info("Chat cleared")
         st.session_state.analysis_messages = []
         st.session_state.workout_messages = []
         st.session_state.active_chat_tab = "analysis"
@@ -236,17 +355,6 @@ with clear_col:
             profile=st.session_state.user_profile,
         )
         st.rerun()
-
-# ── Training type config (used by right column) ────────────────────
-TRAINING_TYPES = {
-    "Easy Run": "Create an easy recovery run workout",
-    "Tempo Run": "Create a tempo run workout at threshold pace",
-    "Interval Training": "Create a high-intensity interval training workout",
-    "Long Run": "Create a long endurance run workout",
-    "Hill Repeats": "Create a hill repeat workout",
-    "Fartlek": "Create a fartlek workout with varied pace changes",
-    "Race Pace": "Create a race pace workout for race preparation",
-}
 
 # ── Make the right column sticky so it scrolls with the page ────────
 st.markdown(
@@ -295,162 +403,177 @@ chat_col, workout_col = st.columns([3, 2])
 
 # ── Right column: Controls + Proposed workouts ─────────────────────
 with workout_col:
-    quick_tab, custom_tab = st.tabs(["Smart Coach", "Advanced Builder"])
+    has_data = st.session_state.activities is not None
+    has_analysis = st.session_state.coach.training_summary is not None
 
-    # ── Tab 1: Smart Coach — analyse first, then recommend ─────────
-    with quick_tab:
-        has_data = st.session_state.activities is not None
-        has_analysis = st.session_state.coach.training_summary is not None
+    if not has_data:
+        st.info("Connect to Garmin and load activities to get started.")
 
-        if not has_data:
-            st.info("Connect to Garmin and load activities to get started.")
-
-        # Step 1: Analyse
-        st.markdown("**Step 1** — Analyse your training")
-        analyse_disabled = not has_data
-        if st.button(
-            "Analyse Training History",
-            use_container_width=True,
-            disabled=analyse_disabled,
-        ):
-            st.session_state.active_chat_tab = "analysis"
-            st.session_state.quick_prompt = (
-                "Provide a concise analysis of my recent training history. Include:\n"
-                "1. **Volume overview**: total runs, total distance, weekly mileage trend\n"
-                "2. **Intensity distribution**: breakdown of easy vs moderate vs hard sessions "
-                "based on pace and heart rate\n"
-                "3. **Training effect analysis**: average aerobic & anaerobic TE, how many sessions "
-                "were recovery, maintaining, improving, or highly improving\n"
-                "4. **Pace progression**: are my paces improving, plateauing, or declining?\n"
-                "5. **Heart rate trends**: is aerobic efficiency improving (same pace at lower HR)?\n"
-                "6. **Recovery patterns**: am I allowing enough recovery between hard sessions?\n"
-                "7. **Strengths & weaknesses**: what am I doing well and what needs attention?\n"
-                "8. **Recommendations**: specific actionable advice for the next 1-2 weeks\n\n"
-                "Be specific with numbers and dates from my data."
-            )
-
-        # Step 2: Recommend
-        st.markdown("**Step 2** — Get a workout recommendation")
-        recommend_disabled = not has_analysis
-        if recommend_disabled and has_data:
-            st.caption("Run the analysis first to unlock recommendations.")
-        if st.button(
-            "Recommend Workout",
-            use_container_width=True,
-            type="primary",
-            disabled=recommend_disabled,
-        ):
-            st.session_state.active_chat_tab = "workout"
-            profile_hint = ""
-            if st.session_state.user_profile:
-                p = st.session_state.user_profile
-                parts = []
-                if p.max_hr:
-                    parts.append(f"max HR {p.max_hr}")
-                if p.lactate_threshold_hr:
-                    parts.append(f"LT HR {p.lactate_threshold_hr}")
-                if p.vo2_max:
-                    parts.append(f"VO2max {p.vo2_max:.1f}")
-                if p.resting_hr:
-                    parts.append(f"resting HR {p.resting_hr}")
-                if parts:
-                    profile_hint = (
-                        f" Use my profile data ({', '.join(parts)}) "
-                        "to set precise pace and HR targets for each phase."
-                    )
-            st.session_state.quick_prompt = (
-                "Based on the training analysis, recommend and create "
-                "the best workout for today. Briefly explain your reasoning."
-                + profile_hint
-            )
-
-    # ── Tab 2: Custom — user specifies what they want ─────────────
-    with custom_tab:
-        gd = st.session_state.garmin_defaults
-        has_garmin = bool(gd)
-
-        # if has_garmin:
-        #     st.caption("Inputs auto-filled from Garmin data. Adjust as needed.")
-
-        training_type = st.selectbox(
-            "Training type",
-            options=list(TRAINING_TYPES.keys()),
-            index=None,
-            placeholder="Select a training type...",
-        )
-        available_minutes = st.number_input(
-            "Available time (min)",
-            min_value=0,
-            max_value=180,
-            value=0,
-            step=5,
-            help="Leave at 0 to let the coach decide",
+    # Step 1: Analyse
+    st.markdown("**Step 1** — Analyse your training")
+    analyse_disabled = not has_data
+    if st.button(
+        "Analyse Training History",
+        use_container_width=True,
+        disabled=analyse_disabled,
+    ):
+        logger.info("Analyse Training History clicked")
+        st.session_state.active_chat_tab = "analysis"
+        st.session_state.quick_prompt = (
+            "Provide a concise analysis of my recent training history. Include:\n"
+            "1. **Volume overview**: total runs, total distance, weekly mileage trend\n"
+            "2. **Intensity distribution**: breakdown of easy vs moderate vs hard sessions "
+            "based on pace and heart rate\n"
+            "3. **Training effect analysis**: average aerobic & anaerobic TE, how many sessions "
+            "were recovery, maintaining, improving, or highly improving\n"
+            "4. **Pace progression**: are my paces improving, plateauing, or declining?\n"
+            "5. **Heart rate trends**: is aerobic efficiency improving (same pace at lower HR)?\n"
+            "6. **Strengths & weaknesses**: what am I doing well and what needs attention?\n"
+            "7. **Recommendations**: specific actionable advice for the next 1-2 weeks\n\n"
+            "Be specific with numbers and dates from my data." + _build_race_goal_hint()
         )
 
-        goal = st.selectbox(
-            "Training goal",
-            [
-                "Build aerobic base",
-                "Raise lactate threshold",
-                "Improve race speed",
-                "Build strength & power",
-            ],
-            key="suggest_goal",
-        )
+    # Step 2: Create sessions from the plan
+    plan = st.session_state.coach.training_plan
+    if plan and plan.sessions:
+        st.markdown("**Step 2** — Create a workout from the plan")
+        st.caption(plan.week_label)
 
-        fatigue = st.select_slider(
-            "How do your legs feel?",
-            options=[1, 2, 3, 4, 5],
-            value=gd.get("fatigue", 2),
-            format_func=lambda x: {
-                1: "1 - Fresh",
-                2: "2 - Good",
-                3: "3 - OK",
-                4: "4 - Tired",
-                5: "5 - Cooked",
-            }[x],
-            key="suggest_fatigue",
-        )
+        # Compute dates for each day from the week label (e.g. "Mar 23-29")
+        import re as _re
 
-        if st.button("Generate Workout", use_container_width=True, type="primary"):
-            st.session_state.active_chat_tab = "workout"
-            parts = []
-            if training_type:
-                parts.append(TRAINING_TYPES[training_type])
-            else:
-                parts.append("Create a running workout")
-            if available_minutes > 0:
-                parts.append(
-                    f"for {available_minutes} minutes total. "
-                    f"Fit everything (warmup, main set, cooldown) within {available_minutes} minutes"
+        _day_map = {
+            "mon": 0,
+            "tue": 1,
+            "wed": 2,
+            "thu": 3,
+            "fri": 4,
+            "sat": 5,
+            "sun": 6,
+        }
+        _week_start = None
+        _date_match = _re.search(r"(\w+ \d+)[-–]", plan.week_label)
+        if _date_match:
+            try:
+                from datetime import datetime as _dt
+
+                _week_start = _dt.strptime(
+                    f"{_date_match.group(1)} {date.today().year}", "%b %d %Y"
+                ).date()
+            except ValueError:
+                pass
+
+        for i, s in enumerate(plan.sessions):
+            # Skip rest/walk days
+            if any(kw in s.session.lower() for kw in ["rest", "walk", "off"]):
+                continue
+
+            # Compute the actual date for this session
+            session_date = None
+            day_key = s.day.lower()[:3]
+            if _week_start and day_key in _day_map:
+                session_date = _week_start + timedelta(days=_day_map[day_key])
+
+            label = f"{s.day} — {s.session} ({s.importance})"
+            if st.button(label, key=f"plan_session_{i}", use_container_width=True):
+                logger.info("Plan session clicked: %s (date=%s)", label, session_date)
+                st.session_state.active_chat_tab = "workout"
+                if session_date:
+                    st.session_state.plan_session_date = session_date
+                st.session_state.quick_prompt = (
+                    f"Create this workout: {s.session}. "
+                    f"Target: {s.target}. "
+                    "Set appropriate paces for all phases." + _build_race_goal_hint()
                 )
-            parts.append(f"My training goal is: {goal}")
-            fatigue_labels = {1: "fresh", 2: "good", 3: "OK", 4: "tired", 5: "cooked"}
-            parts.append(f"My legs feel {fatigue_labels[fatigue]}")
-            st.session_state.quick_prompt = ". ".join(parts) + "."
+                st.rerun()
 
     st.divider()
     st.subheader("Proposed Workouts")
     if not st.session_state.pending_workouts:
-        st.caption("No workouts yet. Chat with the coach or generate one above.")
+        st.caption("No workouts yet. Chat with the coach to generate one.")
+    else:
+        st.caption("Upload to Garmin Connect or schedule for a specific date.")
 
     to_remove = None
-    for i, (name, workout, params) in enumerate(st.session_state.pending_workouts):
+    for i, entry in enumerate(st.session_state.pending_workouts):
+        name, workout, params = entry[0], entry[1], entry[2]
+        planned_date = entry[3] if len(entry) > 3 else None
         is_latest = i == len(st.session_state.pending_workouts) - 1
         with st.expander(f"{name}", expanded=is_latest):
-            # Workout summary metrics
+            # Workout summary
+            dur_min = workout.estimatedDurationInSecs // 60
+            st.caption(f"{dur_min} min | {workout.description or ''}")
+
+            # Phase table
+            def _format_step(step_data, reps=None):
+                """Format a single step into a table row dict."""
+                key = step_data["stepType"]["stepTypeKey"]
+                phase = key.replace("_", " ").capitalize()
+                if reps:
+                    phase = f"{phase} (x{reps})"
+
+                v1 = step_data.get("targetValueOne")
+                v2 = step_data.get("targetValueTwo")
+                avg_speed = (v1 + v2) / 2 if v1 and v2 else None
+                pace = f"{ms_to_pace(v1)}-{ms_to_pace(v2)}/km" if v1 and v2 else "—"
+
+                end_val = step_data.get("endConditionValue", 0) or 0
+                end_key = step_data["endCondition"]["conditionTypeKey"]
+
+                if end_key == "time":
+                    time_s = int(end_val)
+                    time_str = f"{time_s // 60}:{time_s % 60:02d}"
+                    # Estimate distance from time and avg pace
+                    dist_str = (
+                        f"{end_val * avg_speed / 1000:.1f} km" if avg_speed else "—"
+                    )
+                elif end_key == "distance":
+                    dist_m = int(end_val)
+                    dist_str = (
+                        f"{dist_m / 1000:.1f} km" if dist_m >= 1000 else f"{dist_m}m"
+                    )
+                    # Estimate time from distance and avg pace
+                    if avg_speed and avg_speed > 0:
+                        est_secs = int(end_val / avg_speed)
+                        time_str = f"{est_secs // 60}:{est_secs % 60:02d}"
+                    else:
+                        time_str = "—"
+                else:
+                    time_str = "open"
+                    dist_str = "—"
+
+                # HR zone
+                sec_v1 = step_data.get("secondaryTargetValueOne")
+                sec_v2 = step_data.get("secondaryTargetValueTwo")
+                hr_str = f"{int(sec_v1)}-{int(sec_v2)}" if sec_v1 and sec_v2 else "—"
+
+                return {
+                    "Phase": phase,
+                    "Time": time_str,
+                    "Distance": dist_str,
+                    "Pace": pace,
+                    "HR (bpm)": hr_str,
+                }
+
+            phases = []
             segments = workout.workoutSegments
             if segments:
-                steps = segments[0].workoutSteps
-                dur_min = workout.estimatedDurationInSecs // 60
-                m1, m2 = st.columns(2)
-                m1.metric("Duration", f"{dur_min} min")
-                m2.metric("Steps", len(steps))
+                for step in segments[0].workoutSteps:
+                    d = step.model_dump()
+                    if d.get("type") == "RepeatGroupDTO":
+                        reps = d.get("numberOfIterations", 1)
+                        for sub in d.get("workoutSteps", []):
+                            phases.append(_format_step(sub, reps=reps))
+                    else:
+                        phases.append(_format_step(d))
 
-            # Intensity chart
-            if params is not None:
-                fig = plot_workout(params)
-                st.pyplot(fig)
+            if phases:
+                st.dataframe(
+                    pd.DataFrame(phases),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(len(phases) * 36 + 38, 200),
+                )
 
             # Editable name
             custom_name = st.text_input(
@@ -461,63 +584,72 @@ with workout_col:
 
             # Garmin upload / schedule
             if st.session_state.garmin_client is not None:
+                default_date = planned_date
+                if not default_date or default_date < date.today():
+                    default_date = date.today() + timedelta(days=1)
                 schedule_date = st.date_input(
                     "Schedule for",
-                    value=date.today() + timedelta(days=1),
+                    value=default_date,
                     min_value=date.today(),
                     key=f"date_{i}",
                 )
 
-                upload_col, schedule_col, remove_col = st.columns(3)
-                with upload_col:
+                c1, c2, c3 = st.columns(3)
+                with c1:
                     if st.button("Upload", key=f"upload_{i}", use_container_width=True):
                         workout.workoutName = custom_name
                         with st.spinner("Uploading..."):
                             try:
                                 upload_workout(st.session_state.garmin_client, workout)
-                                st.success(f"'{custom_name}' uploaded!")
+                                logger.info("Workout uploaded: %s", custom_name)
+                                st.success("Uploaded!")
                             except Exception as e:
+                                logger.error(
+                                    "Upload failed for '%s': %s", custom_name, e
+                                )
                                 st.error(f"Upload failed: {e}")
-                with schedule_col:
+                with c2:
                     if st.button(
                         "Upload & Schedule",
                         key=f"schedule_{i}",
                         use_container_width=True,
                     ):
                         workout.workoutName = custom_name
-                        with st.spinner("Uploading & scheduling..."):
+                        with st.spinner("Scheduling..."):
                             try:
                                 result = upload_workout(
                                     st.session_state.garmin_client, workout
                                 )
-                                workout_id = result.get("workoutId")
-                                if workout_id:
+                                wid = result.get("workoutId")
+                                if wid:
                                     schedule_workout(
                                         st.session_state.garmin_client,
-                                        workout_id,
+                                        wid,
                                         str(schedule_date),
                                     )
-                                    st.success(
-                                        f"'{custom_name}' scheduled for {schedule_date}!"
+                                    logger.info(
+                                        "Scheduled: %s for %s (ID=%s)",
+                                        custom_name,
+                                        schedule_date,
+                                        wid,
                                     )
+                                    st.success(f"Scheduled for {schedule_date}!")
                                 else:
-                                    st.warning(
-                                        "Uploaded but could not schedule — no workout ID returned."
-                                    )
+                                    st.warning("No workout ID returned.")
                             except Exception as e:
+                                logger.error(
+                                    "Schedule failed for '%s': %s", custom_name, e
+                                )
                                 st.error(f"Failed: {e}")
-                with remove_col:
+                with c3:
                     if st.button("Remove", key=f"remove_{i}", use_container_width=True):
                         to_remove = i
             else:
-                rm_col1, rm_col2 = st.columns([3, 1])
-                with rm_col1:
-                    st.caption("Connect to Garmin to upload.")
-                with rm_col2:
-                    if st.button("Remove", key=f"remove_{i}", use_container_width=True):
-                        to_remove = i
+                if st.button("Remove", key=f"remove_{i}", use_container_width=True):
+                    to_remove = i
 
     if to_remove is not None:
+        logger.info("Workout removed at index %d", to_remove)
         st.session_state.pending_workouts.pop(to_remove)
         st.rerun()
 
@@ -535,8 +667,12 @@ user_input = st.chat_input("Ask your running coach...")
 prompt = None
 if "quick_prompt" in st.session_state:
     prompt = st.session_state.pop("quick_prompt")
+    logger.info("Prompt from quick_prompt: %s...", prompt[:80])
 elif user_input:
     prompt = user_input
+    logger.info("Prompt from chat input: %s...", prompt[:80])
+else:
+    logger.debug("No prompt this run")
 
 _ANALYSIS_KEYWORDS = {
     "analyse",
@@ -559,14 +695,17 @@ _WORKOUT_KEYWORDS = {
 
 
 def _pick_mode(prompt_text: str) -> str:
-    """Pick coach mode (analysis/workout) based on prompt content."""
-    lower = prompt_text.lower()
+    """Pick coach mode (analysis/workout) based on prompt content.
 
-    if any(kw in lower for kw in _ANALYSIS_KEYWORDS):
-        return "analysis"
+    Workout keywords are checked first since they're more specific.
+    """
+    lower = prompt_text.lower()
 
     if any(kw in lower for kw in _WORKOUT_KEYWORDS):
         return "workout"
+
+    if any(kw in lower for kw in _ANALYSIS_KEYWORDS):
+        return "analysis"
 
     # Default to whichever tab is active
     return st.session_state.active_chat_tab
@@ -575,14 +714,17 @@ def _pick_mode(prompt_text: str) -> str:
 if prompt:
     coach = st.session_state.coach
     mode = _pick_mode(prompt)
+    logger.info("Mode: %s (coach was: %s)", mode, coach.mode)
     st.session_state.active_chat_tab = mode
 
-    # Switch coach mode if needed
-    if mode != coach.mode:
-        if mode == "analysis":
-            coach.switch_to_analysis()
-        else:
-            coach.switch_to_workout()
+    # Switch coach mode if needed, or refresh workout mode for new workout requests
+    if mode == "analysis" and coach.mode != "analysis":
+        logger.info("Switching coach to analysis mode")
+        coach.switch_to_analysis()
+    elif mode == "workout" and coach.mode != "workout":
+        logger.info("Switching coach to workout mode")
+        coach.switch_to_workout()
+    logger.info("Coach mode now: %s", coach.mode)
 
     # Pick the right message list
     if mode == "analysis":
@@ -591,6 +733,13 @@ if prompt:
         messages = st.session_state.workout_messages
 
     messages.append({"role": "user", "content": prompt})
+
+    # Show a spinner in the workout column while generating
+    if mode == "workout":
+        with workout_col:
+            status_placeholder = st.empty()
+            status_placeholder.info("Creating workout...")
+
     with chat_col:
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -612,14 +761,26 @@ if prompt:
                 text = f"Sorry, I encountered an error: {e}"
                 st.markdown(text)
 
+    if mode == "workout":
+        status_placeholder.empty()
+
     if text is None:
         text = ""
 
     messages.append({"role": "assistant", "content": text})
 
     if captured["workout"] and captured["params"]:
+        planned_date = st.session_state.pop("plan_session_date", None)
+        logger.info(
+            "Workout created: %s (scheduled=%s)", captured["params"].name, planned_date
+        )
         st.session_state.pending_workouts.append(
-            (captured["params"].name, captured["workout"], captured["params"])
+            (
+                captured["params"].name,
+                captured["workout"],
+                captured["params"],
+                planned_date,
+            )
         )
 
     st.rerun()

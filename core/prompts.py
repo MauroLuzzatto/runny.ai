@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.models import Activities, Activity, UserProfile
@@ -62,12 +61,11 @@ def _format_profile(profile: UserProfile) -> str:
 
 
 def _format_activities(activities: Activities) -> str:
-    """Format run data from the last 2 months for the system prompt."""
-    two_months_ago = datetime.now() - timedelta(days=60)
-    runs = [r for r in activities.runs() if r.start_time_local >= two_months_ago]
+    """Format run data for the system prompt."""
+    runs = activities.runs()
     if not runs:
         return ""
-    lines = [f"\n\nRecent runs (last 2 months, {len(runs)} total):\n"]
+    lines = [f"\n\nRecent runs ({len(runs)} total):\n"]
     for run in runs:
         lines.append(_format_run_summary(run))
     return "\n".join(lines)

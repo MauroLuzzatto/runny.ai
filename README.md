@@ -1,8 +1,97 @@
-# runny.ai
+<p align="center">
+  <img src="logo/logo.png" height="200"/>
+</p>
 
-AI-powered running coach that connects to Garmin Connect, analyzes training history, and generates personalized workouts.
+<h1 align="center">AI-powered running coach for Garmin</h1>
 
-## Alternative name ideas
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.13+-blue.svg" alt="Python"></a>
+  <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/streamlit-1.45+-FF4B4B.svg" alt="Streamlit"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+</p>
 
-- pacr.ai
-- stridelab.ai
+**Runny.AI** connects to your Garmin account, analyzes your training history, and generates personalized running workouts — then uploads them directly to your Garmin watch.
+
+Built with [Streamlit](https://streamlit.io/), [Claude](https://www.anthropic.com/) (via [OpenRouter](https://openrouter.ai/)), and [garminconnect](https://github.com/cyberjunky/python-garminconnect).
+
+## Demo
+
+<!-- TODO: Replace with actual demo GIF -->
+![Demo](demo.gif)
+
+## Features
+
+- **Training Analysis** — Runny.AI fetches your recent runs from Garmin Connect and provides insights on volume, intensity distribution, pace trends, and heart rate efficiency
+- **Personalized Workouts** — Runny.AI generates structured interval and steady-state workouts tailored to your fitness level, training history, and race goals
+- **Garmin Integration** — Upload workouts directly to Garmin Connect and schedule them on your calendar
+- **Runner Profile** — Runny.AI pulls VO2max, HR zones, training load, race predictions, and more from your Garmin data
+- **Race Goal Planning** — Set a target race (5K to marathon) with a goal time, and Runny.AI adapts recommendations accordingly
+
+## How It Works
+
+1. **Connect** your Garmin account and load your activity history
+2. **Analyze** your training — Runny.AI reviews your recent runs and identifies strengths, weaknesses, and trends
+3. **Generate** a workout — describe what you need ("tempo run", "long easy run", "VO2max intervals") and Runny.AI creates a structured session with appropriate paces and HR targets
+4. **Upload** the workout to Garmin Connect and optionally schedule it for a specific date
+
+## Setup
+
+### Prerequisites
+
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) package manager
+- A Garmin Connect account
+- An [OpenRouter](https://openrouter.ai/) API key
+
+### Installation
+
+```bash
+git clone https://github.com/MauroLuzzatto/ai-runny.git
+cd ai-runny
+uv sync
+```
+
+### Configuration
+
+Create a `.streamlit/secrets.toml` file:
+
+```toml
+OPENROUTER_KEY = "your-openrouter-api-key"
+GARMIN_EMAIL = "your-garmin-email"
+GARMIN_PASSWORD = "your-garmin-password"
+```
+
+Or enter credentials directly in the app sidebar.
+
+### Run
+
+```bash
+uv run streamlit run app.py
+```
+
+## Architecture
+
+```
+app.py                  Streamlit UI (sidebar, chat, workout cards)
+core/
+  client.py             Garmin authentication
+  fetch.py              Activity & profile data fetching
+  models.py             Pydantic schemas (Activity, UserProfile, Activities)
+  ai_assistant.py       RunningCoach — LLM orchestration with tool use
+  schemas.py            Workout parameter models & builder dispatch
+  workouts.py           Garmin workout construction & upload
+  prompts.py            System prompt builders
+  prompts/
+    analysis.md         Analysis mode system prompt
+    workout.md          Workout creation system prompt
+```
+
+**Data flow:** Garmin API → Pydantic models → AI coach (Claude via OpenRouter) → tool calls → workout builder → Garmin upload
+
+## Privacy
+
+No GPS data, location, or personal identifiers leave your machine. Only aggregated training metrics (distance, pace, heart rate, training effect) are included in prompts. See [Privacy Policy](?page=privacy) in the app for details.
+
+## License
+
+MIT

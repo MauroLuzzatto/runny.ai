@@ -5,11 +5,11 @@ from core.fetch import (
 )
 from core.models import Activity, Activities, UserProfile
 from core.workouts import (
+    ms_to_pace,
     upload_workout,
     schedule_workout,
 )
 from core.ai_assistant import RunningCoach
-from core.suggestions import derive_inputs_from_garmin
 
 __all__ = [
     "get_client",
@@ -18,8 +18,8 @@ __all__ = [
     "Activity",
     "Activities",
     "UserProfile",
+    "ms_to_pace",
     "upload_workout",
     "schedule_workout",
     "RunningCoach",
-    "derive_inputs_from_garmin",
 ]

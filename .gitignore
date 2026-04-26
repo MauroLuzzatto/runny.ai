@@ -13,3 +13,9 @@ fit_files/
 # Environment variables / secrets
 .env
 .streamlit/secrets.toml
+.TODO.md
+.ruff_cache
+.pytest_cache
+.claude
+
+ideas/

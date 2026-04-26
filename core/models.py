@@ -13,8 +13,14 @@ class ActivityType(BaseModel):
 
 
 class Activity(BaseModel):
-    """Schema for a Garmin Connect activity."""
+    """Schema for a Garmin Connect activity.
 
+    PII fields (activity_id, activity_name, GPS coordinates, location_name,
+    device_id, manufacturer) are intentionally excluded. start_time_local is
+    kept for date-based filtering but only the date portion is sent to the LLM.
+    """
+
+    start_time_local: datetime = Field(alias="startTimeLocal")
     activity_type: ActivityType = Field(alias="activityType")
     sport_type_id: int = Field(alias="sportTypeId")
 
@@ -191,9 +197,6 @@ class Activities(BaseModel):
 
     def runs(self) -> list[Activity]:
         return self.by_sport("running")
-
-    # def swims(self) -> list[Activity]:
-    #     return self.by_sport("lap_swimming")
 
     def after(self, dt: datetime) -> list[Activity]:
         return [a for a in self.items if a.start_time_local > dt]

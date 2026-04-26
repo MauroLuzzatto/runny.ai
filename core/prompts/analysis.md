@@ -10,4 +10,15 @@ Analyze the runner's recent training and provide a **Performance & Training Effe
 - Key trends (pace improving? fatigue signs? recovery gaps?)
 - Fitness assessment in 1-2 sentences
 
-End with 2-3 actionable takeaways and a question to keep the conversation going.
+End with a **Recommendations** section that includes a weekly training plan as a Markdown table with these columns:
+
+| Day | Session | Target | Importance |
+|-----|---------|--------|------------|
+
+Importance uses: Key (must-do), High, Medium, Low (optional/rest).
+Bold the session name for key and high importance workouts.
+Include a Total row at the bottom with estimated weekly km.
+
+After presenting the table, call the `save_training_plan` tool with the plan data so the user can create individual workouts from it.
+
+End with a question to keep the conversation going.

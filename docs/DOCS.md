@@ -30,14 +30,16 @@ Defines what ends a step.
 
 Defines the target zone for a step.
 
-| ID | Key               | Value Unit | Description          |
-|----|-------------------|------------|----------------------|
-| 1  | `no.target`       | —          | No target            |
-| 2  | `heart.rate.zone` | bpm        | Heart rate zone      |
-| 3  | `cadence.zone`    | spm        | Cadence zone         |
-| 4  | `speed.zone`      | m/s        | Speed / pace zone    |
-| 5  | `power.zone`      | watts      | Power zone           |
-| 6  | `open`            | —          | Open target          |
+| ID | Key               | Value Unit   | Description          |
+|----|-------------------|--------------|----------------------|
+| 1  | `no.target`       | —            | No target            |
+| 2  | `heart.rate.zone` | bpm          | Heart rate zone      |
+| 3  | `cadence.zone`    | spm          | Cadence zone         |
+| 4  | `heart.rate.zone` | bpm          | Heart rate zone (*)  |
+| 5  | `power.zone`      | watts        | Power zone           |
+| 6  | `pace.zone`       | seconds/km   | Pace zone            |
+
+(*) Note: ID 4 is mapped to heart.rate.zone by Garmin despite the library listing it as speed. Use ID 6 with `pace.zone` for pace targets (values in seconds per km).
 
 ## Sport Types (`sportTypeId`)
 

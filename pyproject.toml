@@ -1,7 +1,7 @@
 [project]
 name = "ai-runny"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI-powered running coach that connects to Garmin Connect, analyzes training history, and generates personalized workouts"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -9,6 +9,10 @@ dependencies = [
     "openai>=1.40",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",
-    "matplotlib>=3.9",
     "streamlit>=1.45",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
 ]
