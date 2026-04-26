@@ -71,6 +71,11 @@ with st.sidebar:
         type="password",
         key="openrouter_key",
     )
+    st.text_input(
+        "Model",
+        value="anthropic/claude-sonnet-4-6",
+        key="openrouter_model",
+    )
 
     st.header("Garmin Connect")
 
@@ -90,8 +95,6 @@ with st.sidebar:
             except Exception as e:
                 logger.error("Garmin connection failed: %s", e)
                 st.error(f"Connection failed: {e}")
-
-    st.divider()
 
     if (
         st.session_state.garmin_client is not None

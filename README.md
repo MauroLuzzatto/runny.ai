@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo/logo.png" height="200"/>
+  <img src="logo/logo.png" height="250"/>
 </p>
 
 <h1 align="center">AI-powered running coach for Garmin</h1>
@@ -31,7 +31,7 @@ Built with [Streamlit](https://streamlit.io/), [Claude](https://www.anthropic.co
 
 1. **Connect** your Garmin account and load your activity history
 2. **Analyze** your training — Runny.AI reviews your recent runs and identifies strengths, weaknesses, and trends
-3. **Generate** a workout — describe what you need ("tempo run", "long easy run", "VO2max intervals") and Runny.AI creates a structured session with appropriate paces and HR targets
+3. **Generate** ask for the optimal workout or describe what you need ("tempo run", "long easy run", "VO2max intervals") and Runny.AI creates a structured session with appropriate paces and HR targets
 4. **Upload** the workout to Garmin Connect and optionally schedule it for a specific date
 
 ## Setup
@@ -42,6 +42,24 @@ Built with [Streamlit](https://streamlit.io/), [Claude](https://www.anthropic.co
 - [uv](https://docs.astral.sh/uv/) package manager
 - A Garmin Connect account
 - An [OpenRouter](https://openrouter.ai/) API key
+
+### Install uv
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager. Install it with:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+### Get an OpenRouter API key
+
+1. Create an account at [openrouter.ai](https://openrouter.ai/)
+2. Go to [Keys](https://openrouter.ai/keys) and click **Create Key**
+3. Copy the key — you'll need it in the configuration step below
 
 ### Installation
 
@@ -69,24 +87,14 @@ Or enter credentials directly in the app sidebar.
 uv run streamlit run app.py
 ```
 
-## Architecture
+## How It Works Under the Hood
 
-```
-app.py                  Streamlit UI (sidebar, chat, workout cards)
-core/
-  client.py             Garmin authentication
-  fetch.py              Activity & profile data fetching
-  models.py             Pydantic schemas (Activity, UserProfile, Activities)
-  ai_assistant.py       RunningCoach — LLM orchestration with tool use
-  schemas.py            Workout parameter models & builder dispatch
-  workouts.py           Garmin workout construction & upload
-  prompts.py            System prompt builders
-  prompts/
-    analysis.md         Analysis mode system prompt
-    workout.md          Workout creation system prompt
-```
-
-**Data flow:** Garmin API → Pydantic models → AI coach (Claude via OpenRouter) → tool calls → workout builder → Garmin upload
+1. **Authenticate** — Log in to Garmin Connect with your credentials
+2. **Fetch data** — Pull your recent activities, VO2max, heart rate zones, training load, and race predictions from the Garmin API
+3. **Build context** — Activities are validated into structured Pydantic models and summarized into a training profile that is injected into the system prompt
+4. **Chat with the AI coach** — Claude (via OpenRouter) receives your training context and responds to your questions. When you ask for a workout, the LLM makes a tool call with structured parameters (intervals, paces, HR targets)
+5. **Build the workout** — Tool call parameters are used to construct a Garmin-compatible workout object with the correct step types, end conditions, and targets
+6. **Review and upload** — The proposed workout is displayed in the app for review. On confirmation, it is uploaded to Garmin Connect and optionally scheduled on a specific date
 
 ## Privacy
 

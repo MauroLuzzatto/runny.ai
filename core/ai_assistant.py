@@ -22,7 +22,7 @@ from core.schemas import (
 logger = logging.getLogger("runny.coach")
 
 
-MODEL = "anthropic/claude-sonnet-4-6"
+DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 MAX_RETRIES = 3
 
 WORKOUT_TOOLS = [
@@ -368,7 +368,7 @@ class RunningCoach:
     def _call_api(self, stream: bool = False, force_tool: bool = False):
         """Call the OpenRouter API with retry logic."""
         kwargs: dict = {
-            "model": MODEL,
+            "model": st.session_state.get("openrouter_model", DEFAULT_MODEL),
             "messages": self.messages,
             "stream": stream,
         }
