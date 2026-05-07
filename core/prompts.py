@@ -7,11 +7,19 @@ from core.models import Activities, Activity, UserProfile
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+<<<<<<< HEAD
 SYSTEM_PROMPT = (_PROMPTS_DIR / "system.md").read_text()
 ANALYSE_HISTORY_PROMPT = (_PROMPTS_DIR / "analyse_history.md").read_text()
 REVIEW_EXECUTION_PROMPT = (_PROMPTS_DIR / "review_execution.md").read_text()
 CREATE_WORKOUT_PROMPT = (_PROMPTS_DIR / "create_workout.md").read_text()
 TRAINING_PLAN_REVIEW_PROMPT = (_PROMPTS_DIR / "training_plan_review.md").read_text()
+=======
+ANALYSIS_SYSTEM_PROMPT = (_PROMPTS_DIR / "analysis.md").read_text()
+WORKOUT_SYSTEM_PROMPT = (_PROMPTS_DIR / "workout.md").read_text()
+FEEDBACK_SYSTEM_PROMPT = (_PROMPTS_DIR / "feedback.md").read_text()
+ANALYSE_HISTORY_PROMPT = (_PROMPTS_DIR / "analyse_history.md").read_text()
+REVIEW_EXECUTION_PROMPT = (_PROMPTS_DIR / "review_execution.md").read_text()
+>>>>>>> main
 
 
 def _format_run_summary(run: Activity) -> str:
@@ -115,6 +123,7 @@ def _week_boundaries(today: date) -> tuple[date, date, date, date]:
     return this_mon, this_sun, last_mon, last_sun
 
 
+<<<<<<< HEAD
 def build_system_prompt(
     activities: Activities | None = None,
     profile: UserProfile | None = None,
@@ -124,6 +133,40 @@ def build_system_prompt(
     this_mon, this_sun, last_mon, last_sun = _week_boundaries(today)
     lines = [
         SYSTEM_PROMPT,
+=======
+def build_analysis_prompt(
+    activities: Activities | None = None,
+    profile: UserProfile | None = None,
+) -> str:
+    """Build the system prompt for training history analysis."""
+    today = date.today()
+    this_mon, this_sun, last_mon, last_sun = _week_boundaries(today)
+    lines = [
+        ANALYSIS_SYSTEM_PROMPT,
+        f"\n\nToday's date: {today.strftime('%A, %Y-%m-%d')}",
+        f"Current week (in progress, NOT complete): {this_mon.strftime('%Y-%m-%d')} (Mon) – {this_sun.strftime('%Y-%m-%d')} (Sun) — only days up to {today.strftime('%A %Y-%m-%d')} have happened",
+        f"Last completed week: {last_mon.strftime('%Y-%m-%d')} (Mon) – {last_sun.strftime('%Y-%m-%d')} (Sun)",
+    ]
+
+    if profile:
+        lines.append(_format_profile(profile))
+
+    if activities:
+        lines.append(_format_activities(activities))
+
+    return "\n".join(lines)
+
+
+def build_feedback_prompt(
+    activities: Activities | None = None,
+    profile: UserProfile | None = None,
+) -> str:
+    """Build the system prompt for execution feedback on past runs."""
+    today = date.today()
+    this_mon, this_sun, last_mon, last_sun = _week_boundaries(today)
+    lines = [
+        FEEDBACK_SYSTEM_PROMPT,
+>>>>>>> main
         f"\n\nToday's date: {today.strftime('%A, %Y-%m-%d')}",
         f"Current week (in progress, NOT complete): {this_mon.strftime('%Y-%m-%d')} (Mon) – {this_sun.strftime('%Y-%m-%d')} (Sun) — only days up to {today.strftime('%A %Y-%m-%d')} have happened",
         f"Last completed week: {last_mon.strftime('%Y-%m-%d')} (Mon) – {last_sun.strftime('%Y-%m-%d')} (Sun)",
