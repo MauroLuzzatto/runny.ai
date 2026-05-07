@@ -15,7 +15,12 @@ from core import (
 from core import ms_to_pace
 from core.ai_assistant import RunningCoach
 from core.models import Activities
-from core.prompts import ANALYSE_HISTORY_PROMPT, REVIEW_EXECUTION_PROMPT
+from core.prompts import (
+    ANALYSE_HISTORY_PROMPT,
+    CREATE_WORKOUT_PROMPT,
+    REVIEW_EXECUTION_PROMPT,
+    TRAINING_PLAN_REVIEW_PROMPT,
+)
 from core.schemas import (
     SimpleIntervalParams,
     SteadyRunParams,
@@ -44,12 +49,8 @@ if st.query_params.get("page") == "privacy":
     st.stop()
 
 # ── Session state defaults ──────────────────────────────────────────
-if "analysis_messages" not in st.session_state:
-    st.session_state.analysis_messages = []
-if "workout_messages" not in st.session_state:
-    st.session_state.workout_messages = []
-if "feedback_messages" not in st.session_state:
-    st.session_state.feedback_messages = []
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
 if "coach" not in st.session_state:
     st.session_state.coach = RunningCoach()
 if "garmin_client" not in st.session_state:
@@ -358,10 +359,7 @@ with clear_col:
     st.write("")  # vertical spacer to align with title
     if st.button("Clear Chat", use_container_width=True):
         logger.info("Chat cleared")
-        st.session_state.analysis_messages = []
-        st.session_state.workout_messages = []
-        st.session_state.feedback_messages = []
-        st.session_state.active_chat_tab = "analysis"
+        st.session_state.chat_messages = []
         st.session_state.coach = RunningCoach(
             activities=st.session_state.activities,
             profile=st.session_state.user_profile,
@@ -422,7 +420,7 @@ with workout_col:
         st.info("Connect to Garmin and load activities to get started.")
 
     # Step 1: Analyse
-    st.markdown("**Step 1** — Analyse your training")
+    st.markdown("Analyse your training")
     analyse_disabled = not has_data
     if st.button(
         "Analyse Training History",
@@ -442,6 +440,18 @@ with workout_col:
         st.session_state.active_chat_tab = "feedback"
         st.session_state.quick_prompt = (
             REVIEW_EXECUTION_PROMPT + _build_race_goal_hint()
+        )
+
+    if st.button(
+        "Training Plan Review",
+        use_container_width=True,
+        disabled=analyse_disabled
+        or not st.session_state.get("race_goal", {}).get("race_type"),
+    ):
+        logger.info("Training Plan Review clicked")
+        st.session_state.active_chat_tab = "analysis"
+        st.session_state.quick_prompt = (
+            TRAINING_PLAN_REVIEW_PROMPT + _build_race_goal_hint()
         )
 
     # Step 2: Create sessions from the plan
@@ -492,9 +502,9 @@ with workout_col:
                 if session_date:
                     st.session_state.plan_session_date = session_date
                 st.session_state.quick_prompt = (
-                    f"Create this workout: {s.session}. "
-                    f"Target: {s.target}. "
-                    "Set appropriate paces for all phases." + _build_race_goal_hint()
+                    f"{CREATE_WORKOUT_PROMPT}\n\n"
+                    f"Specific workout: {s.session}. Target: {s.target}."
+                    + _build_race_goal_hint()
                 )
                 st.rerun()
 
@@ -836,14 +846,16 @@ with workout_col:
 
 # ── Left column: Chat ──────────────────────────────────────────────
 with chat_col:
-    all_messages = (
-        st.session_state.analysis_messages
-        + st.session_state.workout_messages
-        + st.session_state.feedback_messages
-    )
-    for msg in all_messages:
+    for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+    if st.session_state.chat_messages:
+        st.markdown(
+            "<div id='chat-bottom'></div>"
+            "<script>document.getElementById('chat-bottom')"
+            ".scrollIntoView({behavior:'smooth'});</script>",
+            unsafe_allow_html=True,
+        )
 
 # ── Chat input ────────────────────────────────────────────────────
 user_input = st.chat_input("Ask your running coach...")
@@ -913,26 +925,11 @@ if prompt:
     logger.info("Mode: %s (coach was: %s)", mode, coach.mode)
     st.session_state.active_chat_tab = mode
 
-    # Switch coach mode if needed
-    if mode == "analysis" and coach.mode != "analysis":
-        logger.info("Switching coach to analysis mode")
-        coach.switch_to_analysis()
-    elif mode == "workout" and coach.mode != "workout":
-        logger.info("Switching coach to workout mode")
-        coach.switch_to_workout()
-    elif mode == "feedback" and coach.mode != "feedback":
-        logger.info("Switching coach to feedback mode")
-        coach.switch_to_feedback()
-    logger.info("Coach mode now: %s", coach.mode)
+    if mode != coach.mode:
+        logger.info("Switching coach to %s mode", mode)
+        coach.switch_mode(mode)
 
-    # Pick the right message list
-    if mode == "analysis":
-        messages = st.session_state.analysis_messages
-    elif mode == "feedback":
-        messages = st.session_state.feedback_messages
-    else:
-        messages = st.session_state.workout_messages
-
+    messages = st.session_state.chat_messages
     messages.append({"role": "user", "content": prompt})
 
     # Show a spinner in the workout column while generating
