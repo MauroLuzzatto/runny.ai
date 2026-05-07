@@ -11,11 +11,7 @@ from openai import OpenAI
 from garminconnect.workout import RunningWorkout
 
 from core.models import Activities, UserProfile
-from core.prompts import (
-    build_analysis_prompt,
-    build_feedback_prompt,
-    build_workout_prompt,
-)
+from core.prompts import build_system_prompt
 from core.schemas import (
     SimpleIntervalParams,
     SteadyRunParams,
@@ -71,12 +67,14 @@ ANALYSIS_TOOLS = [
     },
 ]
 
+ALL_TOOLS = ANALYSIS_TOOLS + WORKOUT_TOOLS
+
 
 class RunningCoach:
-    """AI running coach with two modes: analysis and workout creation.
+    """AI running coach that maintains a single continuous conversation.
 
-    The analysis mode evaluates training history (no tools).
-    The workout mode creates workouts informed by a training summary (with tools).
+    Mode (analysis/workout/feedback) controls which tools are available
+    but the conversation history is never reset — prior context carries forward.
     """
 
     def __init__(
@@ -95,66 +93,32 @@ class RunningCoach:
         self.training_plan: TrainingPlan | None = None
         self._mode: str = "analysis"
         self.messages: list[dict] = [
-            {"role": "system", "content": build_analysis_prompt(activities, profile)},
+            {"role": "system", "content": build_system_prompt(activities, profile)},
         ]
 
     @property
     def mode(self) -> str:
         return self._mode
 
-    def switch_to_analysis(self) -> None:
-        """Switch to analysis mode, resetting the conversation."""
-        self._mode = "analysis"
-        self.messages = [
-            {
-                "role": "system",
-                "content": build_analysis_prompt(self.activities, self.profile),
-            },
-        ]
-
-    def switch_to_feedback(self) -> None:
-        """Switch to feedback mode for execution analysis of past runs."""
-        self._mode = "feedback"
-        self.messages = [
-            {
-                "role": "system",
-                "content": build_feedback_prompt(self.activities, self.profile),
-            },
-        ]
-
-    def switch_to_workout(self, training_summary: str | None = None) -> None:
-        """Switch to workout mode with a training summary.
-
-        Args:
-            training_summary: The analysis text to inform workout creation.
-                If None, uses the stored training_summary from a prior analysis.
-        """
-        if training_summary is not None:
-            self.training_summary = training_summary
-        summary = self.training_summary or ""
-        self._mode = "workout"
-        self.messages = [
-            {
-                "role": "system",
-                "content": build_workout_prompt(summary, self.activities, self.profile),
-            },
-        ]
+    def switch_mode(self, mode: str) -> None:
+        """Switch the active mode. Conversation history is preserved."""
+        self._mode = mode
 
     def update_activities(self, activities: Activities) -> None:
-        """Update activities and rebuild the current system prompt."""
+        """Update activities and rebuild the system prompt."""
         self.activities = activities
-        if self._mode == "analysis":
-            self.messages[0] = {
-                "role": "system",
-                "content": build_analysis_prompt(activities, self.profile),
-            }
-        else:
-            self.messages[0] = {
-                "role": "system",
-                "content": build_workout_prompt(
-                    self.training_summary or "", activities, self.profile
-                ),
-            }
+        self.messages[0] = {
+            "role": "system",
+            "content": build_system_prompt(activities, self.profile),
+        }
+
+    def update_profile(self, profile: UserProfile) -> None:
+        """Update profile and rebuild the system prompt."""
+        self.profile = profile
+        self.messages[0] = {
+            "role": "system",
+            "content": build_system_prompt(self.activities, profile),
+        }
 
     def chat(
         self, user_message: str
@@ -393,8 +357,9 @@ class RunningCoach:
             kwargs["tools"] = WORKOUT_TOOLS
             kwargs["tool_choice"] = "required" if force_tool else "auto"
         elif self._mode == "analysis":
-            kwargs["tools"] = ANALYSIS_TOOLS
-            kwargs["tool_choice"] = "auto"
+            kwargs["tools"] = ALL_TOOLS
+            kwargs["tool_choice"] = "required" if force_tool else "auto"
+        # feedback mode: no tools
 
         for attempt in range(MAX_RETRIES):
             try:
