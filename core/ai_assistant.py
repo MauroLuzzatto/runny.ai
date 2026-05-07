@@ -11,15 +11,7 @@ from openai import OpenAI
 from garminconnect.workout import RunningWorkout
 
 from core.models import Activities, UserProfile
-<<<<<<< HEAD
 from core.prompts import build_system_prompt
-=======
-from core.prompts import (
-    build_analysis_prompt,
-    build_feedback_prompt,
-    build_workout_prompt,
-)
->>>>>>> main
 from core.schemas import (
     SimpleIntervalParams,
     SteadyRunParams,

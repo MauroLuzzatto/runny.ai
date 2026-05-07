@@ -15,19 +15,16 @@ from core import (
 from core import ms_to_pace
 from core.ai_assistant import RunningCoach
 from core.models import Activities
-<<<<<<< HEAD
 from core.prompts import (
     ANALYSE_HISTORY_PROMPT,
     CREATE_WORKOUT_PROMPT,
     REVIEW_EXECUTION_PROMPT,
     TRAINING_PLAN_REVIEW_PROMPT,
-=======
-from core.prompts import ANALYSE_HISTORY_PROMPT, REVIEW_EXECUTION_PROMPT
+)
 from core.schemas import (
     SimpleIntervalParams,
     SteadyRunParams,
     build_workout_from_params,
->>>>>>> main
 )
 
 
@@ -52,17 +49,8 @@ if st.query_params.get("page") == "privacy":
     st.stop()
 
 # ── Session state defaults ──────────────────────────────────────────
-<<<<<<< HEAD
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
-=======
-if "analysis_messages" not in st.session_state:
-    st.session_state.analysis_messages = []
-if "workout_messages" not in st.session_state:
-    st.session_state.workout_messages = []
-if "feedback_messages" not in st.session_state:
-    st.session_state.feedback_messages = []
->>>>>>> main
 if "coach" not in st.session_state:
     st.session_state.coach = RunningCoach()
 if "garmin_client" not in st.session_state:
@@ -371,14 +359,7 @@ with clear_col:
     st.write("")  # vertical spacer to align with title
     if st.button("Clear Chat", use_container_width=True):
         logger.info("Chat cleared")
-<<<<<<< HEAD
         st.session_state.chat_messages = []
-=======
-        st.session_state.analysis_messages = []
-        st.session_state.workout_messages = []
-        st.session_state.feedback_messages = []
-        st.session_state.active_chat_tab = "analysis"
->>>>>>> main
         st.session_state.coach = RunningCoach(
             activities=st.session_state.activities,
             profile=st.session_state.user_profile,
@@ -459,7 +440,6 @@ with workout_col:
         st.session_state.active_chat_tab = "feedback"
         st.session_state.quick_prompt = (
             REVIEW_EXECUTION_PROMPT + _build_race_goal_hint()
-<<<<<<< HEAD
         )
 
     if st.button(
@@ -472,8 +452,6 @@ with workout_col:
         st.session_state.active_chat_tab = "analysis"
         st.session_state.quick_prompt = (
             TRAINING_PLAN_REVIEW_PROMPT + _build_race_goal_hint()
-=======
->>>>>>> main
         )
 
     # Step 2: Create sessions from the plan
@@ -680,22 +658,6 @@ with workout_col:
                     avg_speed = (v1 + v2) / 2 if v1 and v2 else None
                     pace = f"{ms_to_pace(v1)}-{ms_to_pace(v2)}/km" if v1 and v2 else "—"
 
-<<<<<<< HEAD
-                if end_key == "time":
-                    time_s = int(end_val)
-                    time_str = f"{time_s // 60}:{time_s % 60:02d}"
-                    dist_str = (
-                        f"{end_val * avg_speed / 1000:.1f} km" if avg_speed else "—"
-                    )
-                elif end_key == "distance":
-                    dist_m = int(end_val)
-                    dist_str = (
-                        f"{dist_m / 1000:.1f} km" if dist_m >= 1000 else f"{dist_m}m"
-                    )
-                    if avg_speed and avg_speed > 0:
-                        est_secs = int(end_val / avg_speed)
-                        time_str = f"{est_secs // 60}:{est_secs % 60:02d}"
-=======
                     end_val = step_data.get("endConditionValue", 0) or 0
                     end_key = step_data["endCondition"]["conditionTypeKey"]
 
@@ -717,7 +679,6 @@ with workout_col:
                             time_str = f"{est_secs // 60}:{est_secs % 60:02d}"
                         else:
                             time_str = "—"
->>>>>>> main
                     else:
                         time_str = "open"
                         dist_str = "—"
@@ -803,44 +764,7 @@ with workout_col:
                             logger.info("Workout modified: %s", name)
                             st.rerun()
                 else:
-<<<<<<< HEAD
-                    time_str = "open"
-                    dist_str = "—"
-
-                sec_v1 = step_data.get("secondaryTargetValueOne")
-                sec_v2 = step_data.get("secondaryTargetValueTwo")
-                hr_str = f"{int(sec_v1)}-{int(sec_v2)}" if sec_v1 and sec_v2 else "—"
-
-                return {
-                    "Phase": phase,
-                    "Time": time_str,
-                    "Distance": dist_str,
-                    "Pace": pace,
-                    "HR (bpm)": hr_str,
-                }
-
-            phases = []
-            segments = workout.workoutSegments
-            if segments:
-                for step in segments[0].workoutSteps:
-                    d = step.model_dump()
-                    if d.get("type") == "RepeatGroupDTO":
-                        reps = d.get("numberOfIterations", 1)
-                        for sub in d.get("workoutSteps", []):
-                            phases.append(_format_step(sub, reps=reps))
-                    else:
-                        phases.append(_format_step(d))
-
-            if phases:
-                st.dataframe(
-                    pd.DataFrame(phases),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(len(phases) * 36 + 38, 200),
-                )
-=======
                     st.caption("Editing not available for this workout type.")
->>>>>>> main
 
             # Editable name
             custom_name = st.text_input(
@@ -922,16 +846,7 @@ with workout_col:
 
 # ── Left column: Chat ──────────────────────────────────────────────
 with chat_col:
-<<<<<<< HEAD
     for msg in st.session_state.chat_messages:
-=======
-    all_messages = (
-        st.session_state.analysis_messages
-        + st.session_state.workout_messages
-        + st.session_state.feedback_messages
-    )
-    for msg in all_messages:
->>>>>>> main
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
     if st.session_state.chat_messages:
@@ -1010,31 +925,9 @@ if prompt:
     logger.info("Mode: %s (coach was: %s)", mode, coach.mode)
     st.session_state.active_chat_tab = mode
 
-<<<<<<< HEAD
     if mode != coach.mode:
         logger.info("Switching coach to %s mode", mode)
         coach.switch_mode(mode)
-=======
-    # Switch coach mode if needed
-    if mode == "analysis" and coach.mode != "analysis":
-        logger.info("Switching coach to analysis mode")
-        coach.switch_to_analysis()
-    elif mode == "workout" and coach.mode != "workout":
-        logger.info("Switching coach to workout mode")
-        coach.switch_to_workout()
-    elif mode == "feedback" and coach.mode != "feedback":
-        logger.info("Switching coach to feedback mode")
-        coach.switch_to_feedback()
-    logger.info("Coach mode now: %s", coach.mode)
-
-    # Pick the right message list
-    if mode == "analysis":
-        messages = st.session_state.analysis_messages
-    elif mode == "feedback":
-        messages = st.session_state.feedback_messages
-    else:
-        messages = st.session_state.workout_messages
->>>>>>> main
 
     messages = st.session_state.chat_messages
     messages.append({"role": "user", "content": prompt})
