@@ -16,7 +16,11 @@ from core import ms_to_pace
 from core.ai_assistant import RunningCoach
 from core.models import Activities
 from core.prompts import ANALYSE_HISTORY_PROMPT, REVIEW_EXECUTION_PROMPT
-from core.schemas import SimpleIntervalParams, SteadyRunParams, build_workout_from_params
+from core.schemas import (
+    SimpleIntervalParams,
+    SteadyRunParams,
+    build_workout_from_params,
+)
 
 
 warnings.filterwarnings("ignore", message=".*use_container_width.*")
@@ -436,7 +440,9 @@ with workout_col:
     ):
         logger.info("Review Execution clicked")
         st.session_state.active_chat_tab = "feedback"
-        st.session_state.quick_prompt = REVIEW_EXECUTION_PROMPT + _build_race_goal_hint()
+        st.session_state.quick_prompt = (
+            REVIEW_EXECUTION_PROMPT + _build_race_goal_hint()
+        )
 
     # Step 2: Create sessions from the plan
     plan = st.session_state.coach.training_plan
@@ -503,16 +509,65 @@ with workout_col:
         """Convert workout params to an editable DataFrame."""
         if isinstance(params, SimpleIntervalParams):
             rows = [
-                {"Phase": "Warmup", "Duration (s)": params.warmup_seconds, "Pace (min/km)": params.warmup_pace_min_km, "HR Low": params.warmup_hr_bpm_low, "HR High": params.warmup_hr_bpm_high, "Reps": 1},
-                {"Phase": "Interval", "Duration (s)": params.interval_seconds, "Pace (min/km)": params.interval_pace_min_km, "HR Low": params.interval_hr_bpm_low, "HR High": params.interval_hr_bpm_high, "Reps": params.intervals},
-                {"Phase": "Recovery", "Duration (s)": params.recovery_seconds, "Pace (min/km)": params.recovery_pace_min_km, "HR Low": params.recovery_hr_bpm_low, "HR High": params.recovery_hr_bpm_high, "Reps": 1},
-                {"Phase": "Cooldown", "Duration (s)": params.cooldown_seconds, "Pace (min/km)": params.cooldown_pace_min_km, "HR Low": params.cooldown_hr_bpm_low, "HR High": params.cooldown_hr_bpm_high, "Reps": 1},
+                {
+                    "Phase": "Warmup",
+                    "Duration (s)": params.warmup_seconds,
+                    "Pace (min/km)": params.warmup_pace_min_km,
+                    "HR Low": params.warmup_hr_bpm_low,
+                    "HR High": params.warmup_hr_bpm_high,
+                    "Reps": 1,
+                },
+                {
+                    "Phase": "Interval",
+                    "Duration (s)": params.interval_seconds,
+                    "Pace (min/km)": params.interval_pace_min_km,
+                    "HR Low": params.interval_hr_bpm_low,
+                    "HR High": params.interval_hr_bpm_high,
+                    "Reps": params.intervals,
+                },
+                {
+                    "Phase": "Recovery",
+                    "Duration (s)": params.recovery_seconds,
+                    "Pace (min/km)": params.recovery_pace_min_km,
+                    "HR Low": params.recovery_hr_bpm_low,
+                    "HR High": params.recovery_hr_bpm_high,
+                    "Reps": 1,
+                },
+                {
+                    "Phase": "Cooldown",
+                    "Duration (s)": params.cooldown_seconds,
+                    "Pace (min/km)": params.cooldown_pace_min_km,
+                    "HR Low": params.cooldown_hr_bpm_low,
+                    "HR High": params.cooldown_hr_bpm_high,
+                    "Reps": 1,
+                },
             ]
         elif isinstance(params, SteadyRunParams):
             rows = [
-                {"Phase": "Warmup", "Duration (s)": params.warmup_seconds, "Pace (min/km)": params.warmup_pace_min_km, "HR Low": params.warmup_hr_bpm_low, "HR High": params.warmup_hr_bpm_high, "Reps": 1},
-                {"Phase": "Run", "Duration (s)": params.run_seconds, "Pace (min/km)": params.run_pace_min_km, "HR Low": params.run_hr_bpm_low, "HR High": params.run_hr_bpm_high, "Reps": 1},
-                {"Phase": "Cooldown", "Duration (s)": params.cooldown_seconds, "Pace (min/km)": params.cooldown_pace_min_km, "HR Low": params.cooldown_hr_bpm_low, "HR High": params.cooldown_hr_bpm_high, "Reps": 1},
+                {
+                    "Phase": "Warmup",
+                    "Duration (s)": params.warmup_seconds,
+                    "Pace (min/km)": params.warmup_pace_min_km,
+                    "HR Low": params.warmup_hr_bpm_low,
+                    "HR High": params.warmup_hr_bpm_high,
+                    "Reps": 1,
+                },
+                {
+                    "Phase": "Run",
+                    "Duration (s)": params.run_seconds,
+                    "Pace (min/km)": params.run_pace_min_km,
+                    "HR Low": params.run_hr_bpm_low,
+                    "HR High": params.run_hr_bpm_high,
+                    "Reps": 1,
+                },
+                {
+                    "Phase": "Cooldown",
+                    "Duration (s)": params.cooldown_seconds,
+                    "Pace (min/km)": params.cooldown_pace_min_km,
+                    "HR Low": params.cooldown_hr_bpm_low,
+                    "HR High": params.cooldown_hr_bpm_high,
+                    "Reps": 1,
+                },
             ]
         else:
             return None
@@ -522,7 +577,12 @@ with workout_col:
         """Convert edited DataFrame back to workout params."""
         row_map = {r["Phase"]: r for r in df.to_dict("records")}
         if isinstance(original_params, SimpleIntervalParams):
-            w, iv, rc, cd = row_map["Warmup"], row_map["Interval"], row_map["Recovery"], row_map["Cooldown"]
+            w, iv, rc, cd = (
+                row_map["Warmup"],
+                row_map["Interval"],
+                row_map["Recovery"],
+                row_map["Cooldown"],
+            )
             return SimpleIntervalParams(
                 name=original_params.name,
                 intervals=int(iv["Reps"]),
@@ -534,10 +594,14 @@ with workout_col:
                 interval_pace_min_km=float(iv["Pace (min/km)"]),
                 recovery_pace_min_km=float(rc["Pace (min/km)"]),
                 cooldown_pace_min_km=float(cd["Pace (min/km)"]),
-                warmup_hr_bpm_low=int(w["HR Low"]), warmup_hr_bpm_high=int(w["HR High"]),
-                interval_hr_bpm_low=int(iv["HR Low"]), interval_hr_bpm_high=int(iv["HR High"]),
-                recovery_hr_bpm_low=int(rc["HR Low"]), recovery_hr_bpm_high=int(rc["HR High"]),
-                cooldown_hr_bpm_low=int(cd["HR Low"]), cooldown_hr_bpm_high=int(cd["HR High"]),
+                warmup_hr_bpm_low=int(w["HR Low"]),
+                warmup_hr_bpm_high=int(w["HR High"]),
+                interval_hr_bpm_low=int(iv["HR Low"]),
+                interval_hr_bpm_high=int(iv["HR High"]),
+                recovery_hr_bpm_low=int(rc["HR Low"]),
+                recovery_hr_bpm_high=int(rc["HR High"]),
+                cooldown_hr_bpm_low=int(cd["HR Low"]),
+                cooldown_hr_bpm_high=int(cd["HR High"]),
             )
         elif isinstance(original_params, SteadyRunParams):
             w, r, cd = row_map["Warmup"], row_map["Run"], row_map["Cooldown"]
@@ -549,9 +613,12 @@ with workout_col:
                 run_pace_min_km=float(r["Pace (min/km)"]),
                 warmup_pace_min_km=float(w["Pace (min/km)"]),
                 cooldown_pace_min_km=float(cd["Pace (min/km)"]),
-                run_hr_bpm_low=int(r["HR Low"]), run_hr_bpm_high=int(r["HR High"]),
-                warmup_hr_bpm_low=int(w["HR Low"]), warmup_hr_bpm_high=int(w["HR High"]),
-                cooldown_hr_bpm_low=int(cd["HR Low"]), cooldown_hr_bpm_high=int(cd["HR High"]),
+                run_hr_bpm_low=int(r["HR Low"]),
+                run_hr_bpm_high=int(r["HR High"]),
+                warmup_hr_bpm_low=int(w["HR Low"]),
+                warmup_hr_bpm_high=int(w["HR High"]),
+                cooldown_hr_bpm_low=int(cd["HR Low"]),
+                cooldown_hr_bpm_high=int(cd["HR High"]),
             )
         return None
 
@@ -593,7 +660,9 @@ with workout_col:
                     elif end_key == "distance":
                         dist_m = int(end_val)
                         dist_str = (
-                            f"{dist_m / 1000:.1f} km" if dist_m >= 1000 else f"{dist_m}m"
+                            f"{dist_m / 1000:.1f} km"
+                            if dist_m >= 1000
+                            else f"{dist_m}m"
                         )
                         if avg_speed and avg_speed > 0:
                             est_secs = int(end_val / avg_speed)
@@ -606,7 +675,9 @@ with workout_col:
 
                     sec_v1 = step_data.get("secondaryTargetValueOne")
                     sec_v2 = step_data.get("secondaryTargetValueTwo")
-                    hr_str = f"{int(sec_v1)}-{int(sec_v2)}" if sec_v1 and sec_v2 else "—"
+                    hr_str = (
+                        f"{int(sec_v1)}-{int(sec_v2)}" if sec_v1 and sec_v2 else "—"
+                    )
 
                     return {
                         "Phase": phase,
@@ -647,19 +718,38 @@ with workout_col:
                         disabled=["Phase"],
                         column_config={
                             "Phase": st.column_config.TextColumn("Phase"),
-                            "Duration (s)": st.column_config.NumberColumn("Duration (s)", min_value=0, step=10),
-                            "Pace (min/km)": st.column_config.NumberColumn("Pace (min/km)", min_value=2.0, max_value=12.0, step=0.1, format="%.1f"),
-                            "HR Low": st.column_config.NumberColumn("HR Low", min_value=60, max_value=220, step=1),
-                            "HR High": st.column_config.NumberColumn("HR High", min_value=60, max_value=220, step=1),
-                            "Reps": st.column_config.NumberColumn("Reps", min_value=1, max_value=30, step=1),
+                            "Duration (s)": st.column_config.NumberColumn(
+                                "Duration (s)", min_value=0, step=10
+                            ),
+                            "Pace (min/km)": st.column_config.NumberColumn(
+                                "Pace (min/km)",
+                                min_value=2.0,
+                                max_value=12.0,
+                                step=0.1,
+                                format="%.1f",
+                            ),
+                            "HR Low": st.column_config.NumberColumn(
+                                "HR Low", min_value=60, max_value=220, step=1
+                            ),
+                            "HR High": st.column_config.NumberColumn(
+                                "HR High", min_value=60, max_value=220, step=1
+                            ),
+                            "Reps": st.column_config.NumberColumn(
+                                "Reps", min_value=1, max_value=30, step=1
+                            ),
                         },
                     )
-                    if st.button("Apply Changes", key=f"apply_{i}", use_container_width=True):
+                    if st.button(
+                        "Apply Changes", key=f"apply_{i}", use_container_width=True
+                    ):
                         new_params = _df_to_params(edited, params)
                         if new_params:
                             new_workout = build_workout_from_params(new_params)
                             st.session_state.pending_workouts[i] = (
-                                name, new_workout, new_params, planned_date,
+                                name,
+                                new_workout,
+                                new_params,
+                                planned_date,
                             )
                             logger.info("Workout modified: %s", name)
                             st.rerun()
