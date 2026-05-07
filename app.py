@@ -15,6 +15,12 @@ from core import (
 from core import ms_to_pace
 from core.ai_assistant import RunningCoach
 from core.models import Activities
+from core.prompts import ANALYSE_HISTORY_PROMPT, REVIEW_EXECUTION_PROMPT
+from core.schemas import (
+    SimpleIntervalParams,
+    SteadyRunParams,
+    build_workout_from_params,
+)
 
 
 warnings.filterwarnings("ignore", message=".*use_container_width.*")
@@ -42,6 +48,8 @@ if "analysis_messages" not in st.session_state:
     st.session_state.analysis_messages = []
 if "workout_messages" not in st.session_state:
     st.session_state.workout_messages = []
+if "feedback_messages" not in st.session_state:
+    st.session_state.feedback_messages = []
 if "coach" not in st.session_state:
     st.session_state.coach = RunningCoach()
 if "garmin_client" not in st.session_state:
@@ -352,6 +360,7 @@ with clear_col:
         logger.info("Chat cleared")
         st.session_state.analysis_messages = []
         st.session_state.workout_messages = []
+        st.session_state.feedback_messages = []
         st.session_state.active_chat_tab = "analysis"
         st.session_state.coach = RunningCoach(
             activities=st.session_state.activities,
@@ -422,18 +431,17 @@ with workout_col:
     ):
         logger.info("Analyse Training History clicked")
         st.session_state.active_chat_tab = "analysis"
+        st.session_state.quick_prompt = ANALYSE_HISTORY_PROMPT + _build_race_goal_hint()
+
+    if st.button(
+        "Review Execution",
+        use_container_width=True,
+        disabled=analyse_disabled,
+    ):
+        logger.info("Review Execution clicked")
+        st.session_state.active_chat_tab = "feedback"
         st.session_state.quick_prompt = (
-            "Provide a concise analysis of my recent training history. Include:\n"
-            "1. **Volume overview**: total runs, total distance, weekly mileage trend\n"
-            "2. **Intensity distribution**: breakdown of easy vs moderate vs hard sessions "
-            "based on pace and heart rate\n"
-            "3. **Training effect analysis**: average aerobic & anaerobic TE, how many sessions "
-            "were recovery, maintaining, improving, or highly improving\n"
-            "4. **Pace progression**: are my paces improving, plateauing, or declining?\n"
-            "5. **Heart rate trends**: is aerobic efficiency improving (same pace at lower HR)?\n"
-            "6. **Strengths & weaknesses**: what am I doing well and what needs attention?\n"
-            "7. **Recommendations**: specific actionable advice for the next 1-2 weeks\n\n"
-            "Be specific with numbers and dates from my data." + _build_race_goal_hint()
+            REVIEW_EXECUTION_PROMPT + _build_race_goal_hint()
         )
 
     # Step 2: Create sessions from the plan
@@ -497,86 +505,256 @@ with workout_col:
     else:
         st.caption("Upload to Garmin Connect or schedule for a specific date.")
 
+    def _params_to_df(params):
+        """Convert workout params to an editable DataFrame."""
+        if isinstance(params, SimpleIntervalParams):
+            rows = [
+                {
+                    "Phase": "Warmup",
+                    "Duration (s)": params.warmup_seconds,
+                    "Pace (min/km)": params.warmup_pace_min_km,
+                    "HR Low": params.warmup_hr_bpm_low,
+                    "HR High": params.warmup_hr_bpm_high,
+                    "Reps": 1,
+                },
+                {
+                    "Phase": "Interval",
+                    "Duration (s)": params.interval_seconds,
+                    "Pace (min/km)": params.interval_pace_min_km,
+                    "HR Low": params.interval_hr_bpm_low,
+                    "HR High": params.interval_hr_bpm_high,
+                    "Reps": params.intervals,
+                },
+                {
+                    "Phase": "Recovery",
+                    "Duration (s)": params.recovery_seconds,
+                    "Pace (min/km)": params.recovery_pace_min_km,
+                    "HR Low": params.recovery_hr_bpm_low,
+                    "HR High": params.recovery_hr_bpm_high,
+                    "Reps": 1,
+                },
+                {
+                    "Phase": "Cooldown",
+                    "Duration (s)": params.cooldown_seconds,
+                    "Pace (min/km)": params.cooldown_pace_min_km,
+                    "HR Low": params.cooldown_hr_bpm_low,
+                    "HR High": params.cooldown_hr_bpm_high,
+                    "Reps": 1,
+                },
+            ]
+        elif isinstance(params, SteadyRunParams):
+            rows = [
+                {
+                    "Phase": "Warmup",
+                    "Duration (s)": params.warmup_seconds,
+                    "Pace (min/km)": params.warmup_pace_min_km,
+                    "HR Low": params.warmup_hr_bpm_low,
+                    "HR High": params.warmup_hr_bpm_high,
+                    "Reps": 1,
+                },
+                {
+                    "Phase": "Run",
+                    "Duration (s)": params.run_seconds,
+                    "Pace (min/km)": params.run_pace_min_km,
+                    "HR Low": params.run_hr_bpm_low,
+                    "HR High": params.run_hr_bpm_high,
+                    "Reps": 1,
+                },
+                {
+                    "Phase": "Cooldown",
+                    "Duration (s)": params.cooldown_seconds,
+                    "Pace (min/km)": params.cooldown_pace_min_km,
+                    "HR Low": params.cooldown_hr_bpm_low,
+                    "HR High": params.cooldown_hr_bpm_high,
+                    "Reps": 1,
+                },
+            ]
+        else:
+            return None
+        return pd.DataFrame(rows)
+
+    def _df_to_params(df, original_params):
+        """Convert edited DataFrame back to workout params."""
+        row_map = {r["Phase"]: r for r in df.to_dict("records")}
+        if isinstance(original_params, SimpleIntervalParams):
+            w, iv, rc, cd = (
+                row_map["Warmup"],
+                row_map["Interval"],
+                row_map["Recovery"],
+                row_map["Cooldown"],
+            )
+            return SimpleIntervalParams(
+                name=original_params.name,
+                intervals=int(iv["Reps"]),
+                interval_seconds=int(iv["Duration (s)"]),
+                recovery_seconds=int(rc["Duration (s)"]),
+                warmup_seconds=int(w["Duration (s)"]),
+                cooldown_seconds=int(cd["Duration (s)"]),
+                warmup_pace_min_km=float(w["Pace (min/km)"]),
+                interval_pace_min_km=float(iv["Pace (min/km)"]),
+                recovery_pace_min_km=float(rc["Pace (min/km)"]),
+                cooldown_pace_min_km=float(cd["Pace (min/km)"]),
+                warmup_hr_bpm_low=int(w["HR Low"]),
+                warmup_hr_bpm_high=int(w["HR High"]),
+                interval_hr_bpm_low=int(iv["HR Low"]),
+                interval_hr_bpm_high=int(iv["HR High"]),
+                recovery_hr_bpm_low=int(rc["HR Low"]),
+                recovery_hr_bpm_high=int(rc["HR High"]),
+                cooldown_hr_bpm_low=int(cd["HR Low"]),
+                cooldown_hr_bpm_high=int(cd["HR High"]),
+            )
+        elif isinstance(original_params, SteadyRunParams):
+            w, r, cd = row_map["Warmup"], row_map["Run"], row_map["Cooldown"]
+            return SteadyRunParams(
+                name=original_params.name,
+                run_seconds=int(r["Duration (s)"]),
+                warmup_seconds=int(w["Duration (s)"]),
+                cooldown_seconds=int(cd["Duration (s)"]),
+                run_pace_min_km=float(r["Pace (min/km)"]),
+                warmup_pace_min_km=float(w["Pace (min/km)"]),
+                cooldown_pace_min_km=float(cd["Pace (min/km)"]),
+                run_hr_bpm_low=int(r["HR Low"]),
+                run_hr_bpm_high=int(r["HR High"]),
+                warmup_hr_bpm_low=int(w["HR Low"]),
+                warmup_hr_bpm_high=int(w["HR High"]),
+                cooldown_hr_bpm_low=int(cd["HR Low"]),
+                cooldown_hr_bpm_high=int(cd["HR High"]),
+            )
+        return None
+
     to_remove = None
     for i, entry in enumerate(st.session_state.pending_workouts):
         name, workout, params = entry[0], entry[1], entry[2]
         planned_date = entry[3] if len(entry) > 3 else None
         is_latest = i == len(st.session_state.pending_workouts) - 1
         with st.expander(f"{name}", expanded=is_latest):
-            # Workout summary
-            dur_min = workout.estimatedDurationInSecs // 60
-            st.caption(f"{dur_min} min | {workout.description or ''}")
+            overview_tab, edit_tab = st.tabs(["Overview", "Edit"])
 
-            # Phase table
-            def _format_step(step_data, reps=None):
-                """Format a single step into a table row dict."""
-                key = step_data["stepType"]["stepTypeKey"]
-                phase = key.replace("_", " ").capitalize()
-                if reps:
-                    phase = f"{phase} (x{reps})"
+            with overview_tab:
+                # Workout summary
+                dur_min = workout.estimatedDurationInSecs // 60
+                st.caption(f"{dur_min} min | {workout.description or ''}")
 
-                v1 = step_data.get("targetValueOne")
-                v2 = step_data.get("targetValueTwo")
-                avg_speed = (v1 + v2) / 2 if v1 and v2 else None
-                pace = f"{ms_to_pace(v1)}-{ms_to_pace(v2)}/km" if v1 and v2 else "—"
+                # Phase table
+                def _format_step(step_data, reps=None):
+                    """Format a single step into a table row dict."""
+                    key = step_data["stepType"]["stepTypeKey"]
+                    phase = key.replace("_", " ").capitalize()
+                    if reps:
+                        phase = f"{phase} (x{reps})"
 
-                end_val = step_data.get("endConditionValue", 0) or 0
-                end_key = step_data["endCondition"]["conditionTypeKey"]
+                    v1 = step_data.get("targetValueOne")
+                    v2 = step_data.get("targetValueTwo")
+                    avg_speed = (v1 + v2) / 2 if v1 and v2 else None
+                    pace = f"{ms_to_pace(v1)}-{ms_to_pace(v2)}/km" if v1 and v2 else "—"
 
-                if end_key == "time":
-                    time_s = int(end_val)
-                    time_str = f"{time_s // 60}:{time_s % 60:02d}"
-                    # Estimate distance from time and avg pace
-                    dist_str = (
-                        f"{end_val * avg_speed / 1000:.1f} km" if avg_speed else "—"
-                    )
-                elif end_key == "distance":
-                    dist_m = int(end_val)
-                    dist_str = (
-                        f"{dist_m / 1000:.1f} km" if dist_m >= 1000 else f"{dist_m}m"
-                    )
-                    # Estimate time from distance and avg pace
-                    if avg_speed and avg_speed > 0:
-                        est_secs = int(end_val / avg_speed)
-                        time_str = f"{est_secs // 60}:{est_secs % 60:02d}"
+                    end_val = step_data.get("endConditionValue", 0) or 0
+                    end_key = step_data["endCondition"]["conditionTypeKey"]
+
+                    if end_key == "time":
+                        time_s = int(end_val)
+                        time_str = f"{time_s // 60}:{time_s % 60:02d}"
+                        dist_str = (
+                            f"{end_val * avg_speed / 1000:.1f} km" if avg_speed else "—"
+                        )
+                    elif end_key == "distance":
+                        dist_m = int(end_val)
+                        dist_str = (
+                            f"{dist_m / 1000:.1f} km"
+                            if dist_m >= 1000
+                            else f"{dist_m}m"
+                        )
+                        if avg_speed and avg_speed > 0:
+                            est_secs = int(end_val / avg_speed)
+                            time_str = f"{est_secs // 60}:{est_secs % 60:02d}"
+                        else:
+                            time_str = "—"
                     else:
-                        time_str = "—"
+                        time_str = "open"
+                        dist_str = "—"
+
+                    sec_v1 = step_data.get("secondaryTargetValueOne")
+                    sec_v2 = step_data.get("secondaryTargetValueTwo")
+                    hr_str = (
+                        f"{int(sec_v1)}-{int(sec_v2)}" if sec_v1 and sec_v2 else "—"
+                    )
+
+                    return {
+                        "Phase": phase,
+                        "Time": time_str,
+                        "Distance": dist_str,
+                        "Pace": pace,
+                        "HR (bpm)": hr_str,
+                    }
+
+                phases = []
+                segments = workout.workoutSegments
+                if segments:
+                    for step in segments[0].workoutSteps:
+                        d = step.model_dump()
+                        if d.get("type") == "RepeatGroupDTO":
+                            reps = d.get("numberOfIterations", 1)
+                            for sub in d.get("workoutSteps", []):
+                                phases.append(_format_step(sub, reps=reps))
+                        else:
+                            phases.append(_format_step(d))
+
+                if phases:
+                    st.dataframe(
+                        pd.DataFrame(phases),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=min(len(phases) * 36 + 38, 200),
+                    )
+
+            with edit_tab:
+                edit_df = _params_to_df(params)
+                if edit_df is not None:
+                    edited = st.data_editor(
+                        edit_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        key=f"edit_{i}",
+                        disabled=["Phase"],
+                        column_config={
+                            "Phase": st.column_config.TextColumn("Phase"),
+                            "Duration (s)": st.column_config.NumberColumn(
+                                "Duration (s)", min_value=0, step=10
+                            ),
+                            "Pace (min/km)": st.column_config.NumberColumn(
+                                "Pace (min/km)",
+                                min_value=2.0,
+                                max_value=12.0,
+                                step=0.1,
+                                format="%.1f",
+                            ),
+                            "HR Low": st.column_config.NumberColumn(
+                                "HR Low", min_value=60, max_value=220, step=1
+                            ),
+                            "HR High": st.column_config.NumberColumn(
+                                "HR High", min_value=60, max_value=220, step=1
+                            ),
+                            "Reps": st.column_config.NumberColumn(
+                                "Reps", min_value=1, max_value=30, step=1
+                            ),
+                        },
+                    )
+                    if st.button(
+                        "Apply Changes", key=f"apply_{i}", use_container_width=True
+                    ):
+                        new_params = _df_to_params(edited, params)
+                        if new_params:
+                            new_workout = build_workout_from_params(new_params)
+                            st.session_state.pending_workouts[i] = (
+                                name,
+                                new_workout,
+                                new_params,
+                                planned_date,
+                            )
+                            logger.info("Workout modified: %s", name)
+                            st.rerun()
                 else:
-                    time_str = "open"
-                    dist_str = "—"
-
-                # HR zone
-                sec_v1 = step_data.get("secondaryTargetValueOne")
-                sec_v2 = step_data.get("secondaryTargetValueTwo")
-                hr_str = f"{int(sec_v1)}-{int(sec_v2)}" if sec_v1 and sec_v2 else "—"
-
-                return {
-                    "Phase": phase,
-                    "Time": time_str,
-                    "Distance": dist_str,
-                    "Pace": pace,
-                    "HR (bpm)": hr_str,
-                }
-
-            phases = []
-            segments = workout.workoutSegments
-            if segments:
-                for step in segments[0].workoutSteps:
-                    d = step.model_dump()
-                    if d.get("type") == "RepeatGroupDTO":
-                        reps = d.get("numberOfIterations", 1)
-                        for sub in d.get("workoutSteps", []):
-                            phases.append(_format_step(sub, reps=reps))
-                    else:
-                        phases.append(_format_step(d))
-
-            if phases:
-                st.dataframe(
-                    pd.DataFrame(phases),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(len(phases) * 36 + 38, 200),
-                )
+                    st.caption("Editing not available for this workout type.")
 
             # Editable name
             custom_name = st.text_input(
@@ -659,7 +837,9 @@ with workout_col:
 # ── Left column: Chat ──────────────────────────────────────────────
 with chat_col:
     all_messages = (
-        st.session_state.analysis_messages + st.session_state.workout_messages
+        st.session_state.analysis_messages
+        + st.session_state.workout_messages
+        + st.session_state.feedback_messages
     )
     for msg in all_messages:
         with st.chat_message(msg["role"]):
@@ -677,6 +857,16 @@ elif user_input:
 else:
     logger.debug("No prompt this run")
 
+_FEEDBACK_KEYWORDS = {
+    "execution",
+    "executed",
+    "pacing",
+    "splits",
+    "grade",
+    "feedback",
+    "review how",
+    "hr drift",
+}
 _ANALYSIS_KEYWORDS = {
     "analyse",
     "analysis",
@@ -698,14 +888,17 @@ _WORKOUT_KEYWORDS = {
 
 
 def _pick_mode(prompt_text: str) -> str:
-    """Pick coach mode (analysis/workout) based on prompt content.
+    """Pick coach mode (analysis/workout/feedback) based on prompt content.
 
-    Workout keywords are checked first since they're more specific.
+    Workout keywords are checked first since they're most specific.
     """
     lower = prompt_text.lower()
 
     if any(kw in lower for kw in _WORKOUT_KEYWORDS):
         return "workout"
+
+    if any(kw in lower for kw in _FEEDBACK_KEYWORDS):
+        return "feedback"
 
     if any(kw in lower for kw in _ANALYSIS_KEYWORDS):
         return "analysis"
@@ -720,18 +913,23 @@ if prompt:
     logger.info("Mode: %s (coach was: %s)", mode, coach.mode)
     st.session_state.active_chat_tab = mode
 
-    # Switch coach mode if needed, or refresh workout mode for new workout requests
+    # Switch coach mode if needed
     if mode == "analysis" and coach.mode != "analysis":
         logger.info("Switching coach to analysis mode")
         coach.switch_to_analysis()
     elif mode == "workout" and coach.mode != "workout":
         logger.info("Switching coach to workout mode")
         coach.switch_to_workout()
+    elif mode == "feedback" and coach.mode != "feedback":
+        logger.info("Switching coach to feedback mode")
+        coach.switch_to_feedback()
     logger.info("Coach mode now: %s", coach.mode)
 
     # Pick the right message list
     if mode == "analysis":
         messages = st.session_state.analysis_messages
+    elif mode == "feedback":
+        messages = st.session_state.feedback_messages
     else:
         messages = st.session_state.workout_messages
 

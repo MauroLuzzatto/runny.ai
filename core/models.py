@@ -12,16 +12,27 @@ class ActivityType(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class EventType(BaseModel):
+    type_id: int = Field(alias="typeId")
+    type_key: str = Field(alias="typeKey")
+
+    model_config = {"populate_by_name": True}
+
+
 class Activity(BaseModel):
     """Schema for a Garmin Connect activity.
 
-    PII fields (activity_id, activity_name, GPS coordinates, location_name,
-    device_id, manufacturer) are intentionally excluded. start_time_local is
-    kept for date-based filtering but only the date portion is sent to the LLM.
+    PII fields (GPS coordinates, location_name, device_id, manufacturer)
+    are intentionally excluded. start_time_local is kept for date-based
+    filtering but only the date portion is sent to the LLM.
+    activity_id is kept internally for fetching splits but not sent to the LLM.
     """
 
+    activity_id: int = Field(alias="activityId")
+    activity_name: str | None = Field(None, alias="activityName")
     start_time_local: datetime = Field(alias="startTimeLocal")
     activity_type: ActivityType = Field(alias="activityType")
+    event_type: EventType | None = Field(None, alias="eventType")
     sport_type_id: int = Field(alias="sportTypeId")
 
     # Distance & duration
@@ -119,6 +130,9 @@ class Activity(BaseModel):
     # Meta
     lap_count: int | None = Field(None, alias="lapCount")
     pr: bool = False
+
+    # Per-lap splits (populated after fetch, not from the activities list API)
+    splits: list[dict] | None = None
 
     model_config = {"populate_by_name": True}
 
