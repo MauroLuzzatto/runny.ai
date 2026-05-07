@@ -18,6 +18,9 @@ fit_files/
 .pytest_cache
 .claude
 
+# Session memory (user-specific)
+data/
+
 ideas/
 
 logo/Screen Recording 2026-04-26 at 20.33.12.mov

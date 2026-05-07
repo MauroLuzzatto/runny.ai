@@ -9,6 +9,7 @@ Guidelines:
 - Add a **Total Time** row and a one-line **Prospective Training Effect** (aerobic TE + anaerobic TE on the Garmin 1.0-5.0 scale)
 - ALWAYS set pace for EVERY phase (warmup, interval, recovery, cooldown) — these show as pace targets on the runner's Garmin watch
 - IMPORTANT: After creating the workout via tool call, ALWAYS respond with a brief summary of the workout you created (key phases, target paces, total time) and end with a question or option for the user. Never leave the user without a text response.
+- Reference past coaching sessions (if available) to maintain continuity and build on prior recommendations.
 
 HR zones: Z1 (50-60%), Z2 (60-70%), Z3 (70-80%), Z4 (80-90%), Z5 (90-100% max HR).
 A visual intensity chart is rendered automatically — do NOT include ASCII art.

@@ -8,6 +8,51 @@ from core.models import Activity, Activities, UserProfile
 logger = logging.getLogger(__name__)
 
 
+def _parse_splits(data: dict) -> list[dict] | None:
+    """Extract per-lap pace and HR from split summaries response."""
+    summaries = data if isinstance(data, list) else data.get("splitSummaries", [])
+    if not summaries:
+        return None
+
+    laps = []
+    for s in summaries:
+        # Skip non-lap splits (e.g. "TOTAL" or summary rows)
+        split_type = s.get("splitType", "")
+        if split_type and split_type.upper() in ("TOTAL", "SUMMARY"):
+            continue
+
+        distance_m = s.get("distance", 0)
+        duration_s = s.get("duration", 0) or s.get("totalTime", 0)
+        avg_speed = s.get("averageSpeed", 0)
+        avg_hr = s.get("averageHR") or s.get("averageHeartRate")
+        max_hr = s.get("maxHR") or s.get("maxHeartRate")
+
+        if not duration_s:
+            continue
+
+        # Calculate pace from speed (m/s -> min/km) or from distance/duration
+        if avg_speed and avg_speed > 0:
+            pace = round((1000 / avg_speed) / 60, 2)
+        elif distance_m and distance_m > 0:
+            pace = round((duration_s / 60) / (distance_m / 1000), 2)
+        else:
+            pace = None
+
+        lap = {
+            "distance_m": round(distance_m),
+            "duration_s": round(duration_s),
+        }
+        if pace:
+            lap["pace_min_km"] = pace
+        if avg_hr:
+            lap["avg_hr"] = int(avg_hr)
+        if max_hr:
+            lap["max_hr"] = int(max_hr)
+        laps.append(lap)
+
+    return laps if laps else None
+
+
 def fetch_activities(
     client: Garmin, start: int = 0, limit: int = 100, months: int = 2
 ) -> Activities:
@@ -18,6 +63,23 @@ def fetch_activities(
     raw = client.get_activities(start=start, limit=limit)
     items = [Activity.model_validate(a) for a in raw]
     filtered = [a for a in items if a.start_time_local >= cutoff]
+
+    # Fetch per-lap splits for runs so the LLM can see interval structure
+    for activity in filtered:
+        if (
+            activity.activity_type.type_key == "running"
+            and (activity.lap_count or 0) > 1
+        ):
+            try:
+                data = client.get_activity_split_summaries(str(activity.activity_id))
+                splits = _parse_splits(data)
+                if splits:
+                    activity.splits = splits
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch splits for %s: %s", activity.activity_id, e
+                )
+
     return Activities(items=filtered)
 
 

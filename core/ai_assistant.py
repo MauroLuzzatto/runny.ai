@@ -11,7 +11,7 @@ from openai import OpenAI
 from garminconnect.workout import RunningWorkout
 
 from core.models import Activities, UserProfile
-from core.prompts import build_analysis_prompt, build_workout_prompt
+from core.prompts import build_analysis_prompt, build_feedback_prompt, build_workout_prompt
 from core.schemas import (
     SimpleIntervalParams,
     SteadyRunParams,
@@ -105,6 +105,16 @@ class RunningCoach:
             {
                 "role": "system",
                 "content": build_analysis_prompt(self.activities, self.profile),
+            },
+        ]
+
+    def switch_to_feedback(self) -> None:
+        """Switch to feedback mode for execution analysis of past runs."""
+        self._mode = "feedback"
+        self.messages = [
+            {
+                "role": "system",
+                "content": build_feedback_prompt(self.activities, self.profile),
             },
         ]
 
@@ -239,11 +249,14 @@ class RunningCoach:
                     )
                     if not tool_calls_data:
                         return
-                else:
+                elif self._mode == "workout":
                     # In workout mode: force a workout tool call
                     tool_calls_data = self._force_tool_call()
                     if not tool_calls_data:
                         return
+                else:
+                    # Feedback mode: no tools, just return text
+                    return
 
             # Handle tool calls
             workout, params = self._handle_tool_calls_from_dicts(tool_calls_data)
